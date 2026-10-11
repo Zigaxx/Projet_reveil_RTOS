@@ -1,0 +1,19 @@
+# Fichiers de compilation (Build outputs)
+Debug/
+Release/
+bin/
+obj/
+
+# Fichiers de configuration utilisateur locale
+.settings/
+*.launch
+*.local
+
+# Fichiers temporaires et sauvegardes de STM32CubeMX / IDE
+*.bak
+*.log
+*~
+
+# Fichiers spécifiques au système d'exploitation
+.DS_Store
+Thumbs.db
