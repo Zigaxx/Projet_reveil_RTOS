@@ -84,6 +84,22 @@ typedef struct
 	uint16_t seuil_temperature;
 	uint16_t seuil_qa;
 } Consignes;
+
+typedef enum {
+    CMD_SET_AFFICHAGE, CMD_SET_MELODIE, CMD_SET_HEURE, CMD_SET_ALARME,
+    CMD_SET_CREPUSCULE, CMD_SET_SEUIL_LUMI, CMD_SET_SEUIL_QA,
+    CMD_SET_SEUIL_TEMP, CMD_SNOOZE, CMD_STOP_REVEIL
+} CommandeType;
+
+typedef struct {
+    CommandeType type;
+    union {
+        Heure    heure;     // CMD_SET_HEURE, CMD_SET_ALARME
+        uint16_t valeur;    // seuils
+    } data;
+} Commande;
+
+QueueHandle_t xQueueCommandes;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -110,6 +126,7 @@ void StartDefaultTask(void const * argument);
 
 Consignes consignes;
 Heure heure = {0,0,0};
+Heure alarme = {0,0,0};
 /* USER CODE END 0 */
 
 /**
@@ -169,6 +186,7 @@ int main(void)
 
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
+  xQueueCommandes = xQueueCreate(10, sizeof(Commande));
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
@@ -774,7 +792,7 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pins : SW2_Pin SW1_Pin */
   GPIO_InitStruct.Pin = SW2_Pin|SW1_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
@@ -792,6 +810,10 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(DIS_GPIO_Port, &GPIO_InitStruct);
 
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
+
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
   /* USER CODE END MX_GPIO_Init_2 */
@@ -799,6 +821,24 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 
+
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+	Commande cmd;
+
+	if(GPIO_Pin == SW1_Pin)
+	{
+		cmd.type = CMD_SET_AFFICHAGE;
+	}
+	else if(GPIO_Pin == SW2_Pin)
+	{
+		cmd.type = CMD_SET_MELODIE;
+	}
+	else if(GPIO_Pin == B1_Pin)
+	{
+		cmd.type = CMD_SET_CREPUSCULE;
+	}
+}
 /* USER CODE END 4 */
 
 /* USER CODE BEGIN Header_StartDefaultTask */
