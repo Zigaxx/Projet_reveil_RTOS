@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include "ssd1306.h"
 #include <stdbool.h>
+#include <string.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -86,17 +87,12 @@ typedef struct
 } Consignes;
 
 typedef enum {
-    CMD_SET_AFFICHAGE, CMD_SET_MELODIE, CMD_SET_HEURE, CMD_SET_ALARME,
-    CMD_SET_CREPUSCULE, CMD_SET_SEUIL_LUMI, CMD_SET_SEUIL_QA,
-    CMD_SET_SEUIL_TEMP, CMD_SNOOZE, CMD_STOP_REVEIL
+	CMD_SET_AFFICHAGE, CMD_SET_MELODIE, CMD_BUETOOTH, CMD_SET_CREPUSCULE, CMD_SNOOZE, CMD_STOP_REVEIL
 } CommandeType;
 
 typedef struct {
     CommandeType type;
-    union {
-        Heure    heure;     // CMD_SET_HEURE, CMD_SET_ALARME
-        uint16_t valeur;    // seuils
-    } data;
+    char str[20];
 } Commande;
 
 QueueHandle_t xQueueCommandes;
@@ -118,7 +114,7 @@ static void MX_TIM8_Init(void);
 void StartDefaultTask(void const * argument);
 
 /* USER CODE BEGIN PFP */
-
+void ReadCommandTask(void *argument);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -127,6 +123,71 @@ void StartDefaultTask(void const * argument);
 Consignes consignes;
 Heure heure = {0,0,0};
 Heure alarme = {0,0,0};
+
+Commande ReceivedCommand;
+
+uint16_t time_tof1;
+uint16_t time_tof2;
+
+uint8_t bluetoothChar;
+char bluetoothMsg[20];
+uint8_t indexBluetoothMsg;
+
+
+/*
+static char *trim(char *s)
+{
+    while (isspace((unsigned char)*s)) s++;
+    char *fin = s + strlen(s);
+    while (fin > s && isspace((unsigned char)fin[-1])) *--fin = '\0';
+    return s;
+}
+
+// "h:min:sec" -> secondes depuis minuit
+static bool parseHMS(const char *v, int32_t *secondes)
+{
+    int h, m, s;
+    char extra;
+    if (sscanf(v, "%d:%d:%d %c", &h, &m, &s, &extra) != 3) return false;
+    if (h < 0 || h > 23 || m < 0 || m > 59 || s < 0 || s > 59) return false;
+    *secondes = h * 3600 + m * 60 + s;
+    return true;
+}
+
+static bool parseEntier(const char *v, int32_t min, int32_t max, int32_t *out)
+{
+    char *fin;
+    long x = strtol(v, &fin, 10);
+    if (fin == v || *fin != '\0' || x < min || x > max) return false;
+    *out = (int32_t)x;
+    return true;
+}
+
+static void TraiterLigne(char *ligne)
+{
+    char *sep = strchr(ligne, '=');
+    if (sep == NULL) { Repondre("ERR\r\n"); return; }
+
+    *sep = '\0';
+    char *nom = trim(ligne);
+    char *val = trim(sep + 1);
+    for (char *p = nom; *p; p++) *p = (char)tolower((unsigned char)*p);
+
+    Commande cmd;
+    int32_t  v;
+
+    if      (strcmp(nom, "heure") == 0       && parseHMS(val, &v))           cmd.type = CMD_HEURE;
+    else if (strcmp(nom, "alarme") == 0      && parseHMS(val, &v))           cmd.type = CMD_ALARME;
+    else if (strcmp(nom, "temperature") == 0 && parseEntier(val, -40, 125, &v)) cmd.type = CMD_SEUIL_TEMP;
+    else if (strcmp(nom, "qa") == 0          && parseEntier(val, 0, 100, &v))   cmd.type = CMD_SEUIL_QA;
+    else if (strcmp(nom, "luminosite") == 0  && parseEntier(val, 0, 100, &v))   cmd.type = CMD_SEUIL_LUM;
+    else { Repondre("ERR\r\n"); return; }
+
+    cmd.data = v;
+    if (xQueueSend(xQueueCommandes, &cmd, 0) == pdPASS) Repondre("OK\r\n");
+    else                                                 Repondre("BUSY\r\n");
+}
+*/
 /* USER CODE END 0 */
 
 /**
@@ -170,6 +231,7 @@ int main(void)
   MX_TIM8_Init();
   /* USER CODE BEGIN 2 */
 
+  HAL_UART_Receive_IT(&hlpuart1, (uint8_t *) &bluetoothChar, 1);
   /* USER CODE END 2 */
 
   /* USER CODE BEGIN RTOS_MUTEX */
@@ -196,6 +258,12 @@ int main(void)
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
+  xTaskCreate(      ReadCommandTask,       /* Function that implements the task. */
+                      "ReadCommand",          /* Text name for the task. */
+                      1024,      /* Stack size in words, not bytes. */
+                      NULL,    /* Parameter passed into the task. */
+                      tskIDLE_PRIORITY+1,/* Priority at which the task is created. */
+                      NULL );      /* Used to pass out the created task's handle. */
   /* USER CODE END RTOS_THREADS */
 
   /* Start scheduler */
@@ -431,8 +499,8 @@ static void MX_LPUART1_UART_Init(void)
 
   /* USER CODE END LPUART1_Init 1 */
   hlpuart1.Instance = LPUART1;
-  hlpuart1.Init.BaudRate = 209700;
-  hlpuart1.Init.WordLength = UART_WORDLENGTH_7B;
+  hlpuart1.Init.BaudRate = 9600;
+  hlpuart1.Init.WordLength = UART_WORDLENGTH_8B;
   hlpuart1.Init.StopBits = UART_STOPBITS_1;
   hlpuart1.Init.Parity = UART_PARITY_NONE;
   hlpuart1.Init.Mode = UART_MODE_TX_RX;
@@ -779,10 +847,13 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(DIR_GPIO_Port, DIR_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOH, SHUT1_Pin|SHUT2_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(DIS_GPIO_Port, DIS_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, SW2_Pin|DIS_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(DIR_GPIO_Port, DIR_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;
@@ -790,10 +861,18 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : SW2_Pin SW1_Pin */
-  GPIO_InitStruct.Pin = SW2_Pin|SW1_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  /*Configure GPIO pins : SHUT1_Pin SHUT2_Pin */
+  GPIO_InitStruct.Pin = SHUT1_Pin|SHUT2_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOH, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : SW2_Pin DIS_Pin */
+  GPIO_InitStruct.Pin = SW2_Pin|DIS_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /*Configure GPIO pin : DIR_Pin */
@@ -803,12 +882,17 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(DIR_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : DIS_Pin */
-  GPIO_InitStruct.Pin = DIS_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  /*Configure GPIO pin : SW1_Pin */
+  GPIO_InitStruct.Pin = SW1_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(DIS_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(SW1_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : INTOF2_Pin INTOF1_Pin */
+  GPIO_InitStruct.Pin = INTOF2_Pin|INTOF1_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
   /* EXTI interrupt init*/
   HAL_NVIC_SetPriority(EXTI15_10_IRQn, 5, 0);
@@ -820,11 +904,21 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+void ReadCommandTask(void *argument)
+{
+	Commande cmd;
+	while(1)
+	{
+		xQueueReceive(xQueueCommandes, &cmd,portMAX_DELAY);
 
+		ReceivedCommand = cmd;
+	}
+}
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
 	Commande cmd;
+	BaseType_t woken = pdFALSE; //sert à reveiller la tache gestion de commande
 
 	if(GPIO_Pin == SW1_Pin)
 	{
@@ -838,7 +932,54 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 	{
 		cmd.type = CMD_SET_CREPUSCULE;
 	}
+	if(GPIO_Pin == INTOF1_Pin)
+	{
+		//time_tof1 = osKernelGetTickCount();
+	}
+	else if(GPIO_Pin == INTOF2_Pin)
+	{
+		//time_tof2 = osKernelGetTickCount();
+	}
+
+
+	xQueueSendFromISR(xQueueCommandes,&cmd,&woken);
+	portYIELD_FROM_ISR(woken);
 }
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+	if (huart->Instance == LPUART1)
+	{
+		BaseType_t xWoken = pdFALSE;
+		uint8_t c = bluetoothChar;
+
+		if (c == '\n' || c == '\r')
+		{
+			if (indexBluetoothMsg > 0)
+			{
+				Commande cmd;
+				cmd.type = CMD_BUETOOTH;
+				bluetoothMsg[indexBluetoothMsg] = '\0'; // ajout du caractère de fin
+				strcpy(cmd.str, bluetoothMsg); // copie du message dans la commadne à envoyer
+				xQueueSendFromISR(xQueueCommandes, &cmd, &xWoken);
+				indexBluetoothMsg = 0;
+			}
+		}
+		else if (indexBluetoothMsg < sizeof(bluetoothMsg) - 1)
+		{
+			bluetoothMsg[indexBluetoothMsg] = (char)c;
+			indexBluetoothMsg += 1;
+		}
+		else
+		{
+			indexBluetoothMsg = 0; // ligne trop longue : on jette
+		}
+
+		HAL_UART_Receive_IT(&hlpuart1, (uint8_t *) &bluetoothChar, 1);
+		portYIELD_FROM_ISR(xWoken);
+	}
+}
+
 /* USER CODE END 4 */
 
 /* USER CODE BEGIN Header_StartDefaultTask */
