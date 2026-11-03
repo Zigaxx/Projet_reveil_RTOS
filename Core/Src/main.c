@@ -35,7 +35,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define PERIODE_HORLOGE  1000
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -84,6 +84,46 @@ typedef struct
 	uint16_t seuil_temperature;
 	uint16_t seuil_qa;
 } Consignes;
+
+typedef struct
+{
+	uint16_t temperature;
+	uint16_t luminosite;
+	uint16_t qualite_air;
+	uint16_t qualite_sommeil;
+}Infos;
+
+typedef struct
+{
+	//LED Adressables
+	bool led_valide; // Ordre pour les LEDS adressables
+	uint8_t led_niveau; //
+	// ECRAN
+	bool ecran_valide;
+	uint16_t ecran_sel; // 0 = heure, 1 = temp, 2 = QA, 3 = QS
+	Heure ecran_heure; // heure courante
+	uint16_t ecran_valeur; // temp, QA ou QS selon ecran_sel
+	bool ecran_retro;
+} Affichages;
+
+
+// DECLARATION TACHES
+xTaskHandle xTaskGestionHorloge;
+
+void task_gestion_horloge(void *pvParameters);
+// DECLARATION SEMAPHORES
+xSemaphoreHandle mtx_consignesHandle;
+xSemaphoreHandle sem_alarmeHandle;
+xSemaphoreHandle mtx_heureHandle;
+// MAILBOXES
+xQueueHandle InfosHandle;
+xQueueHandle AffHandle;
+
+// FONCTIONS
+void Heure_Incrementer(Heure *h);
+bool Heure_Egales(Heure a, Heure b);
+void Aff_ecran(Heure h, uint16_t sel, uint16_t valeur, bool retro);
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -161,6 +201,9 @@ int main(void)
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
   /* add semaphores, ... */
+  sem_alarmeHandle = xSemaphoreCreateBinary();
+  mtx_consignesHandle = xSemaphoreCreateMutex();
+  mtx_heureHandle = xSemaphoreCreateMutex();
   /* USER CODE END RTOS_SEMAPHORES */
 
   /* USER CODE BEGIN RTOS_TIMERS */
@@ -169,6 +212,7 @@ int main(void)
 
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
+  InfosHandle = xQueueCreate(1, sizeof(Infos) );
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
@@ -177,6 +221,13 @@ int main(void)
   defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
 
   /* USER CODE BEGIN RTOS_THREADS */
+  xTaskCreate(task_gestion_horloge,       /* Function that implements the task. */
+  			"TASK_GESTION_HORLOGE",          /* Text name for the task. */
+  			1024,      /* Stack size in words, not bytes. */
+  			NULL,    /* Parameter passed into the task. */
+  			tskIDLE_PRIORITY+11,/* Priority at which the task is created. */
+  			&xTaskGestionHorloge );      /* Used to pass out the created task's handle. */
+
   /* add threads, ... */
   /* USER CODE END RTOS_THREADS */
 
@@ -798,6 +849,83 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+void Heure_Incrementer(Heure *h){
+	h->sec++;
+	if(h->sec >= 60){
+		h->sec = 0;
+		h->min++;
+	}
+	if(h->min >= 60){
+		h->min = 0;
+		h->h++;
+	}
+	if(h->h >= 24){
+		h->h++;
+	}
+}
+
+bool Heure_Egales(Heure a, Heure b){
+	if( (a.h == b.h) && (a.min == b.min) && (a.sec == b.sec)){
+		return true;
+	}
+	return false;
+}
+
+void Aff_ecran(Heure h, uint16_t sel, uint16_t valeur, bool retro){
+	Affichages aff;
+	aff.ecran_heure = h;
+	aff.ecran_sel = sel;
+	aff.ecran_valide = true;
+	aff.ecran_retro = retro;
+	aff.ecran_valeur = valeur;
+	xQueueSend(AffHandle, &aff, pdMS_TO_TICKS(10));   // si pleine, la MAJ de la seconde suivante rattrapera
+}
+
+void task_gestion_horloge(void *pvParameters){
+	TickType_t dernier = xTaskGetTickCount();
+	Infos infos;
+
+	while(1){
+		vTaskDelayUntil(&dernier, pdMS_TO_TICKS(PERIODE_HORLOGE));
+
+		// Incrementation heure
+		Heure h;
+		xSemaphoreTake(mtx_heureHandle, portMAX_DELAY);
+		Heure_Incrementer(&heure);
+		h = heure; // Copie locale pour la comparaison avec l'alarme
+		xSemaphoreGive(mtx_heureHandle);
+
+		bool mesure_ok = (xQueuePeek(InfosHandle, &infos, 0) == pdPASS); // dernières mesures (Peek, comme pour le ventilateur)
+
+		// Alarme
+		xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
+		bool declencher = Heure_Egales(h, consignes.alarme) && !consignes.activer_alarme;
+		if(declencher){
+			consignes.activer_alarme = true; // Pour la gestion de l'aube
+		}
+
+		// Retroeclairage
+		if(mesure_ok){
+			consignes.activer_retroeclairage = (infos.luminosite < consignes.seuil_luminosite);
+		}
+		bool retro = consignes.activer_retroeclairage;
+		uint8_t sel = consignes.sel_affichage;
+		xSemaphoreGive(mtx_consignesHandle);
+
+		if(declencher){
+			xSemaphoreGive(sem_alarmeHandle); // reveil de la task de gestion d'alarme
+		}
+		// Selection affichage
+		uint8_t valeur =0;
+		switch(sel){
+			case 1: valeur = infos.temperature;
+			case 2: valeur = infos.qualite_air;
+			case 3: valeur = infos.qualite_sommeil;
+		}
+		// Actualisation ecran
+		Aff_ecran(h, sel, valeur, retro);
+	}
+}
 
 /* USER CODE END 4 */
 
