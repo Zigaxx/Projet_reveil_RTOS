@@ -164,6 +164,7 @@ void task_interface_aff(void *pvParameters);
 xSemaphoreHandle sem_ledHandle; // fin de trame DMA
 xSemaphoreHandle mtx_adcHandle;
 xSemaphoreHandle mtx_consignesHandle;
+xSemaphoreHandle mtx_i2cHandle;
 // MAILBOXES
 xQueueHandle AffHandle;
 
@@ -264,6 +265,7 @@ int main(void)
   sem_ledHandle = xSemaphoreCreateBinary();
   mtx_adcHandle = xSemaphoreCreateMutex();
   mtx_consignesHandle = xSemaphoreCreateMutex();
+  mtx_i2cHandle = xSemaphoreCreateMutex();
   /* USER CODE END RTOS_SEMAPHORES */
 
   /* USER CODE BEGIN RTOS_TIMERS */
@@ -1035,7 +1037,9 @@ void Ecran_Afficher(const Affichages *a){
 	ssd1306_SetCursor(0, 30);
 	ssd1306_WriteString(l2, Font_11x18, White);
 	ssd1306_SetContrast(a->ecran_retro ? 0xFF : 0x40);
+	xSemaphoreTake(mtx_i2cHandle, portMAX_DELAY);
 	ssd1306_UpdateScreen();
+	xSemaphoreGive(mtx_i2cHandle);
 }
 
 // Ventilateur
