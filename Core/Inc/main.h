@@ -84,6 +84,7 @@ void Error_Handler(void);
 #define LedAdressable_GPIO_Port GPIOB
 #define SW2_Pin GPIO_PIN_11
 #define SW2_GPIO_Port GPIOB
+#define SW2_EXTI_IRQn EXTI15_10_IRQn
 #define Buzzer_Pin GPIO_PIN_9
 #define Buzzer_GPIO_Port GPIOC
 #define DIR_Pin GPIO_PIN_9
@@ -97,10 +98,8 @@ void Error_Handler(void);
 #define SW1_EXTI_IRQn EXTI15_10_IRQn
 #define INTOF2_Pin GPIO_PIN_10
 #define INTOF2_GPIO_Port GPIOC
-#define INTOF2_EXTI_IRQn EXTI15_10_IRQn
 #define INTOF1_Pin GPIO_PIN_11
 #define INTOF1_GPIO_Port GPIOC
-#define INTOF1_EXTI_IRQn EXTI15_10_IRQn
 #define SWO_Pin GPIO_PIN_3
 #define SWO_GPIO_Port GPIOB
 #define DIS_Pin GPIO_PIN_5

@@ -27,44 +27,11 @@
 #include "ssd1306.h"
 #include <stdbool.h>
 #include <string.h>
+#include "vl53l1_api.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
-/* USER CODE END PTD */
-
-/* Private define ------------------------------------------------------------*/
-/* USER CODE BEGIN PD */
-
-/* USER CODE END PD */
-
-/* Private macro -------------------------------------------------------------*/
-/* USER CODE BEGIN PM */
-
-/* USER CODE END PM */
-
-/* Private variables ---------------------------------------------------------*/
-ADC_HandleTypeDef hadc1;
-
-CAN_HandleTypeDef hcan1;
-
-I2C_HandleTypeDef hi2c1;
-
-UART_HandleTypeDef hlpuart1;
-UART_HandleTypeDef huart2;
-
-SPI_HandleTypeDef hspi2;
-
-TIM_HandleTypeDef htim2;
-TIM_HandleTypeDef htim3;
-TIM_HandleTypeDef htim5;
-TIM_HandleTypeDef htim8;
-
-osThreadId defaultTaskHandle;
-
-#define TAILLE_MAX_MSG_BLUETOOTH 20
-/* USER CODE BEGIN PV */
 typedef struct
 {
 	uint16_t h;
@@ -100,8 +67,45 @@ typedef struct {
     CommandeType type;
     char str[20];
 } Commande;
+/* USER CODE END PTD */
+
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+#define TAILLE_MAX_MSG_BLUETOOTH 20
+
+#define TOF_PRESENT_MM 300
+#define TOF_HOLD_MS 600
+#define TOF_SWIPE_WINDOW_MS 1000
+#define TOF_PERIOD_MS 20
+/* USER CODE END PD */
+
+/* Private macro -------------------------------------------------------------*/
+/* USER CODE BEGIN PM */
+
+/* USER CODE END PM */
+
+/* Private variables ---------------------------------------------------------*/
+ADC_HandleTypeDef hadc1;
+
+CAN_HandleTypeDef hcan1;
+
+I2C_HandleTypeDef hi2c1;
+
+UART_HandleTypeDef hlpuart1;
+UART_HandleTypeDef huart2;
+
+SPI_HandleTypeDef hspi2;
+
+TIM_HandleTypeDef htim2;
+TIM_HandleTypeDef htim3;
+TIM_HandleTypeDef htim5;
+TIM_HandleTypeDef htim8;
+
+osThreadId defaultTaskHandle;
+/* USER CODE BEGIN PV */
 
 QueueHandle_t xQueueCommandes;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -120,7 +124,13 @@ static void MX_TIM8_Init(void);
 void StartDefaultTask(void const * argument);
 
 /* USER CODE BEGIN PFP */
+bool CommandBlutoothTypeExtraction(char *cmd, uint8_t *index, char *commandType);
+bool ChooseBluetoothCommandType(char * cmd, CommandeBluetoothType *type);
+bool TimeExtraction(char *cmd, uint8_t *index, Heure *value);
+bool SplitCommandBluetooth(char * cmd, int *seuil, Heure *horaire);
+
 void ReadCommandTask(void *argument);
+void TofTask(void *argument);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -129,15 +139,29 @@ void ReadCommandTask(void *argument);
 Consignes consignes;
 Heure heure = {0,0,0};
 Heure alarme = {0,0,0};
+int seuilTest;
+CommandeBluetoothType cmdBluetoothTypeTest;
 
 Commande ReceivedCommand;
-
-uint16_t time_tof1;
-uint16_t time_tof2;
 
 uint8_t bluetoothChar;
 char bluetoothMsg[TAILLE_MAX_MSG_BLUETOOTH];
 uint8_t indexBluetoothMsg;
+
+uint16_t time_tof1;
+uint16_t time_tof2;
+
+static VL53L1_Dev_t tof[2];
+static bool tofPresent[2];
+
+bool alarmeEnCours = true;
+
+static void SendCmd(CommandeType t)
+{
+	Commande c = {0};
+	c.type = t;
+	xQueueSend(xQueueCommandes, &c, 0);
+}
 
 bool CommandBlutoothTypeExtraction(char *cmd, uint8_t *index, char *commandType)
 {
@@ -187,7 +211,7 @@ bool ChooseBluetoothCommandType(char * cmd, CommandeBluetoothType *type)
 	{
 		return false; // Commande inconnue
 	}
-
+	cmdBluetoothTypeTest = *type;
 	return true;
 }
 
@@ -262,6 +286,51 @@ bool SplitCommandBluetooth(char * cmd, int *seuil, Heure *horaire)
 
 
 	return true;
+}
+
+static void TofInit(void)
+{
+	HAL_GPIO_WritePin(GPIOH, SHUT1_Pin | SHUT2_Pin, GPIO_PIN_RESET);
+	vTaskDelay(pdMS_TO_TICKS(10));
+
+	// capteur 1 : on le réveille et on change son adresse
+	tof[0].I2cHandle  = &hi2c1;
+	tof[0].I2cDevAddr = 0x52;
+	HAL_GPIO_WritePin(GPIOH, SHUT1_Pin, GPIO_PIN_SET);
+	vTaskDelay(pdMS_TO_TICKS(5));
+	VL53L1_WaitDeviceBooted(&tof[0]);
+	VL53L1_SetDeviceAddress(&tof[0], 0x54);
+	tof[0].I2cDevAddr = 0x54;
+
+	// capteur 2 : garde l'adresse par défaut
+	tof[1].I2cHandle  = &hi2c1;
+	tof[1].I2cDevAddr = 0x52;
+	HAL_GPIO_WritePin(GPIOH, SHUT2_Pin, GPIO_PIN_SET);
+	vTaskDelay(pdMS_TO_TICKS(5));
+	VL53L1_WaitDeviceBooted(&tof[1]);
+
+	for (int i = 0; i < 2; i++)
+	{
+		VL53L1_DataInit(&tof[i]);
+		VL53L1_StaticInit(&tof[i]);
+		VL53L1_SetDistanceMode(&tof[i], VL53L1_DISTANCEMODE_SHORT);
+		VL53L1_SetMeasurementTimingBudgetMicroSeconds(&tof[i], 20000);
+		VL53L1_StartMeasurement(&tof[i]);
+	}
+}
+
+// met à jour tofPresent[i] si une nouvelle mesure est prête
+static void TofUpdate(int i)
+{
+	uint8_t ready = 0;
+	VL53L1_GetMeasurementDataReady(&tof[i], &ready);
+	if (ready)
+	{
+		VL53L1_RangingMeasurementData_t m;
+		VL53L1_GetRangingMeasurementData(&tof[i], &m);
+		VL53L1_ClearInterruptAndStartMeasurement(&tof[i]);
+		tofPresent[i] = (m.RangeStatus == 0) && (m.RangeMilliMeter < TOF_PRESENT_MM);
+	}
 }
 
 /* USER CODE END 0 */
@@ -339,6 +408,12 @@ int main(void)
                       1024,      /* Stack size in words, not bytes. */
                       NULL,    /* Parameter passed into the task. */
                       tskIDLE_PRIORITY+1,/* Priority at which the task is created. */
+                      NULL );      /* Used to pass out the created task's handle. */
+  xTaskCreate(      TofTask,       /* Function that implements the task. */
+                      "TofTask",          /* Text name for the task. */
+                      1024,      /* Stack size in words, not bytes. */
+                      NULL,    /* Parameter passed into the task. */
+                      tskIDLE_PRIORITY+5,/* Priority at which the task is created. */
                       NULL );      /* Used to pass out the created task's handle. */
   /* USER CODE END RTOS_THREADS */
 
@@ -926,10 +1001,10 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOH, SHUT1_Pin|SHUT2_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, SW2_Pin|DIS_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(DIR_GPIO_Port, DIR_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(DIR_GPIO_Port, DIR_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(DIS_GPIO_Port, DIS_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;
@@ -944,12 +1019,11 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOH, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : SW2_Pin DIS_Pin */
-  GPIO_InitStruct.Pin = SW2_Pin|DIS_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  /*Configure GPIO pin : SW2_Pin */
+  GPIO_InitStruct.Pin = SW2_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  HAL_GPIO_Init(SW2_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : DIR_Pin */
   GPIO_InitStruct.Pin = DIR_Pin;
@@ -966,9 +1040,16 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pins : INTOF2_Pin INTOF1_Pin */
   GPIO_InitStruct.Pin = INTOF2_Pin|INTOF1_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : DIS_Pin */
+  GPIO_InitStruct.Pin = DIS_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(DIS_GPIO_Port, &GPIO_InitStruct);
 
   /* EXTI interrupt init*/
   HAL_NVIC_SetPriority(EXTI15_10_IRQn, 5, 0);
@@ -983,13 +1064,74 @@ static void MX_GPIO_Init(void)
 void ReadCommandTask(void *argument)
 {
 	Commande cmd;
+
+
 	while(1)
 	{
 		xQueueReceive(xQueueCommandes, &cmd,portMAX_DELAY);
 
 		ReceivedCommand = cmd;
+
+		if(cmd.type == CMD_BUETOOTH)
+		{
+			SplitCommandBluetooth(cmd.str, &seuilTest, &heure);
+		}
 	}
 }
+
+
+void TofTask(void *argument)
+{
+	bool prev[2] = {false, false};
+	TickType_t start[2] = {0, 0};
+	TickType_t lastFall = 0;
+	int lastFallIdx = -1;
+	bool locked = false; // vrai après un stop/snooze, jusqu'à ce que les 2 capteurs soient libres
+
+	TofInit();
+
+	for (;;)
+	{
+		TickType_t now = xTaskGetTickCount();
+
+		for (int i = 0; i < 2; i++)
+		{
+			TofUpdate(i);
+			bool cur = tofPresent[i];
+
+			if (cur && !prev[i]) // main arrive sur i
+			{
+				start[i] = now;
+				if (!locked && lastFallIdx == 1 - i &&
+						(now - lastFall) < pdMS_TO_TICKS(TOF_SWIPE_WINDOW_MS))
+				{
+					if(alarmeEnCours)
+						SendCmd(CMD_SNOOZE);
+					locked = true;
+				}
+			}
+			else if (!cur && prev[i]) // main quitte i
+			{
+				lastFall = now;
+				lastFallIdx = i;
+			}
+
+			if (cur && !locked && (now - start[i]) >= pdMS_TO_TICKS(TOF_HOLD_MS))
+			{
+				if(alarmeEnCours)
+				SendCmd(CMD_STOP_REVEIL);
+				locked = true;
+			}
+			prev[i] = cur;
+		}
+
+		if (!tofPresent[0] && !tofPresent[1])
+			locked = false;
+
+		vTaskDelay(pdMS_TO_TICKS(TOF_PERIOD_MS));
+	}
+}
+
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
@@ -1008,15 +1150,6 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 	{
 		cmd.type = CMD_SET_CREPUSCULE;
 	}
-	if(GPIO_Pin == INTOF1_Pin)
-	{
-		//time_tof1 = osKernelGetTickCount();
-	}
-	else if(GPIO_Pin == INTOF2_Pin)
-	{
-		//time_tof2 = osKernelGetTickCount();
-	}
-
 
 	xQueueSendFromISR(xQueueCommandes,&cmd,&woken);
 	portYIELD_FROM_ISR(woken);
