@@ -35,6 +35,11 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define PERIODE_ACQ_MS (5*60*1000)
+#define NB_TOF 4
+#define LDR_ADC ADC_CHANNEL_13
+
+#define SGP40_ADDR     (0x59 << 1)
 
 /* USER CODE END PD */
 
@@ -59,6 +64,7 @@ TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
 TIM_HandleTypeDef htim5;
 TIM_HandleTypeDef htim8;
+DMA_HandleTypeDef hdma_tim3_ch4_up;
 
 osThreadId defaultTaskHandle;
 /* USER CODE BEGIN PV */
@@ -84,11 +90,76 @@ typedef struct
 	uint16_t seuil_temperature;
 	uint16_t seuil_qa;
 } Consignes;
+
+typedef struct
+{
+	//LED Adressables
+	bool led_valide; // Ordre pour les LEDS adressables
+	uint8_t led_niveau; //
+	// ECRAN
+	bool ecran_valide;
+	uint16_t ecran_sel; // 0 = heure, 1 = temp, 2 = QA, 3 = QS
+	Heure ecran_heure; // heure courante
+	uint16_t ecran_valeur; // temp, QA ou QS selon ecran_sel
+	bool ecran_retro;
+} Affichages;
+
+typedef struct
+{
+	bool act_rafraichissement;
+	bool act_balayage;
+	bool act_alarme;        // true = sonner, false = couper
+	bool alarme_valide; 	// Provisoire Signal d'ordre
+	bool ventilo_valide;	// Provisoire
+}Actions;
+
+typedef struct
+{
+	uint16_t temperature;
+	uint16_t luminosite;
+	uint16_t qualite_air;
+	uint16_t qualite_sommeil;
+}Infos;
+
+volatile int16_t temp_comp_c = 25;            // température utilisée pour compenser le SGP40
+uint16_t sgp40_baseline = 0;
+
+// DECLARATION TACHES
+xTaskHandle xTaskAcqLumi;
+xTaskHandle xTaskAcqTempQA;
+xTaskHandle xTaskAcqTof;
+
+void task_acq_luminosite(void *pvParameters);
+void task_acq_temp_qa(void *pvParameters);
+void task_acq_tof(void *pvParameters);
+// DECLARATION SEMAPHORES
+xSemaphoreHandle mtx_infosHandle;
+xSemaphoreHandle mtx_consignesHandle;
+xSemaphoreHandle mtx_adcHandle;
+xSemaphoreHandle mtx_i2cHandle;
+// MAILBOXES
+xQueueHandle InfosHandle;
+
+// FONCTIONS
+uint16_t ADC_Lire(uint32_t canal);
+
+uint16_t Lire_Luminosite();
+
+void Temp_Init();
+uint16_t Lire_Temperature();
+
+uint16_t QA_Init();
+uint16_t Lire_QA();
+
+void ToF_Init();
+bool ToF_Lire(uint16_t distances[NB_TOF]);
+uint16_t Calcul_QS(const uint16_t distances[NB_TOF]);
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_ADC1_Init(void);
@@ -110,6 +181,9 @@ void StartDefaultTask(void const * argument);
 
 Consignes consignes;
 Heure heure = {0,0,0};
+Infos infos_acq = {0};
+
+
 /* USER CODE END 0 */
 
 /**
@@ -141,6 +215,7 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_USART2_UART_Init();
   MX_I2C1_Init();
   MX_ADC1_Init();
@@ -161,6 +236,9 @@ int main(void)
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
   /* add semaphores, ... */
+  mtx_infosHandle = xSemaphoreCreateMutex();
+  mtx_consignesHandle = xSemaphoreCreateMutex();
+  mtx_i2cHandle = xSemaphoreCreateMutex();
   /* USER CODE END RTOS_SEMAPHORES */
 
   /* USER CODE BEGIN RTOS_TIMERS */
@@ -177,6 +255,26 @@ int main(void)
   defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
 
   /* USER CODE BEGIN RTOS_THREADS */
+  xTaskCreate(task_acq_luminosite,       /* Function that implements the task. */
+   			"TASK_ACQ_LUMI",          /* Text name for the task. */
+   			1024,      /* Stack size in words, not bytes. */
+   			NULL,    /* Parameter passed into the task. */
+   			tskIDLE_PRIORITY+1,/* Priority at which the task is created. */
+   			&xTaskAcqLumi  );      /* Used to pass out the created task's handle. */
+
+  xTaskCreate(task_acq_temp_qa,       /* Function that implements the task. */
+     			"TASK_ACQ_TEMPQA",          /* Text name for the task. */
+     			1024,      /* Stack size in words, not bytes. */
+     			NULL,    /* Parameter passed into the task. */
+     			tskIDLE_PRIORITY+2,/* Priority at which the task is created. */
+     			&xTaskAcqTempQA  );      /* Used to pass out the created task's handle. */
+
+  xTaskCreate(task_acq_tof,       /* Function that implements the task. */
+     			"TASK_ACQ_TOF",          /* Text name for the task. */
+     			1024,      /* Stack size in words, not bytes. */
+     			NULL,    /* Parameter passed into the task. */
+     			tskIDLE_PRIORITY+3,/* Priority at which the task is created. */
+     			&xTaskAcqTof  );      /* Used to pass out the created task's handle. */
   /* add threads, ... */
   /* USER CODE END RTOS_THREADS */
 
@@ -270,11 +368,11 @@ static void MX_ADC1_Init(void)
   hadc1.Init.ClockPrescaler = ADC_CLOCK_ASYNC_DIV1;
   hadc1.Init.Resolution = ADC_RESOLUTION_12B;
   hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
-  hadc1.Init.ScanConvMode = ADC_SCAN_DISABLE;
-  hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
+  hadc1.Init.ScanConvMode = ADC_SCAN_ENABLE;
+  hadc1.Init.EOCSelection = ADC_EOC_SEQ_CONV;
   hadc1.Init.LowPowerAutoWait = DISABLE;
   hadc1.Init.ContinuousConvMode = DISABLE;
-  hadc1.Init.NbrOfConversion = 1;
+  hadc1.Init.NbrOfConversion = 2;
   hadc1.Init.DiscontinuousConvMode = DISABLE;
   hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
   hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
@@ -298,10 +396,19 @@ static void MX_ADC1_Init(void)
   */
   sConfig.Channel = ADC_CHANNEL_13;
   sConfig.Rank = ADC_REGULAR_RANK_1;
-  sConfig.SamplingTime = ADC_SAMPLETIME_2CYCLES_5;
+  sConfig.SamplingTime = ADC_SAMPLETIME_47CYCLES_5;
   sConfig.SingleDiff = ADC_SINGLE_ENDED;
   sConfig.OffsetNumber = ADC_OFFSET_NONE;
   sConfig.Offset = 0;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure Regular Channel
+  */
+  sConfig.Channel = ADC_CHANNEL_11;
+  sConfig.Rank = ADC_REGULAR_RANK_2;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
     Error_Handler();
@@ -485,10 +592,10 @@ static void MX_SPI2_Init(void)
   hspi2.Instance = SPI2;
   hspi2.Init.Mode = SPI_MODE_MASTER;
   hspi2.Init.Direction = SPI_DIRECTION_2LINES;
-  hspi2.Init.DataSize = SPI_DATASIZE_4BIT;
+  hspi2.Init.DataSize = SPI_DATASIZE_8BIT;
   hspi2.Init.CLKPolarity = SPI_POLARITY_LOW;
   hspi2.Init.CLKPhase = SPI_PHASE_1EDGE;
-  hspi2.Init.NSS = SPI_NSS_SOFT;
+  hspi2.Init.NSS = SPI_NSS_HARD_OUTPUT;
   hspi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
   hspi2.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi2.Init.TIMode = SPI_TIMODE_DISABLE;
@@ -527,7 +634,7 @@ static void MX_TIM2_Init(void)
   htim2.Instance = TIM2;
   htim2.Init.Prescaler = 0;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 4294967295;
+  htim2.Init.Period = 3999;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_PWM_Init(&htim2) != HAL_OK)
@@ -577,7 +684,7 @@ static void MX_TIM3_Init(void)
   htim3.Instance = TIM3;
   htim3.Init.Prescaler = 0;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 65535;
+  htim3.Init.Period = 99-1;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
@@ -638,7 +745,7 @@ static void MX_TIM5_Init(void)
   htim5.Init.Period = 4294967295;
   htim5.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim5.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  sConfig.EncoderMode = TIM_ENCODERMODE_TI1;
+  sConfig.EncoderMode = TIM_ENCODERMODE_TI12;
   sConfig.IC1Polarity = TIM_ICPOLARITY_RISING;
   sConfig.IC1Selection = TIM_ICSELECTION_DIRECTTI;
   sConfig.IC1Prescaler = TIM_ICPSC_DIV1;
@@ -743,6 +850,22 @@ static void MX_TIM8_Init(void)
 }
 
 /**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA1_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA1_Channel3_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Channel3_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Channel3_IRQn);
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -764,7 +887,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(DIR_GPIO_Port, DIR_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(DIS_GPIO_Port, DIS_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, DIS_Pin|CE_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;
@@ -785,12 +908,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(DIR_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : DIS_Pin */
-  GPIO_InitStruct.Pin = DIS_Pin;
+  /*Configure GPIO pins : DIS_Pin CE_Pin */
+  GPIO_InitStruct.Pin = DIS_Pin|CE_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(DIS_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
@@ -798,6 +921,151 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+uint16_t ADC_Lire(uint32_t canal){
+	uint8_t valeur[2];
+
+	xSemaphoreTake(mtx_adcHandle,portMAX_DELAY);
+	HAL_ADC_Start(&hadc1);
+	for (int i = 0; i < 2; i++) {
+		if(HAL_ADC_PollForConversion(&hadc1,10) == HAL_OK){
+			valeur[i] = (uint16_t)HAL_ADC_GetValue(&hadc1);
+		}
+	}
+	HAL_ADC_Stop(&hadc1);
+
+	xSemaphoreGive(mtx_adcHandle);
+	return valeur[canal];
+}
+
+uint16_t Lire_Luminosite(){
+	return ADC_Lire(LDR_ADC);
+}
+
+void Temp_Init(){
+	uint8_t tx[2] = {0x80,0x00}; //
+	HAL_GPIO_WritePin(CE_GPIO_Port, CE_Pin, GPIO_PIN_SET);
+	HAL_SPI_Transmit(&hspi2, tx, 2, 10);
+	HAL_GPIO_WritePin(CE_GPIO_Port, CE_Pin, GPIO_PIN_RESET);
+	vTaskDelay(pdMS_TO_TICKS(200)); // attente de 150 ms + marge
+}
+
+uint16_t Lire_Temperature(){
+	uint16_t  derniere = 0;
+	uint8_t tx[4] = {0x02,0,0,0}; // Addr lecture, MSB, LSB, Control bytes
+	uint8_t rx[4] = {0};
+
+	HAL_GPIO_WritePin(CE_GPIO_Port, CE_Pin, GPIO_PIN_SET);
+	HAL_StatusTypeDef st = HAL_SPI_TransmitReceive(&hspi2, tx, rx, 4, 10);
+	HAL_GPIO_WritePin(CE_GPIO_Port, CE_Pin, GPIO_PIN_RESET);
+
+	if(st == HAL_OK){
+		int8_t msb = (int8_t)rx[1];
+		temp_comp_c = msb;
+		derniere = (msb < 0) ? 0 : (uint16_t)msb;
+	}
+
+	return derniere;
+}
+
+uint16_t QA_Init(){
+	uint8_t cmd[8] = {0x26, 0x0F, 0x80, 0x00, 0xA2, 0x66, 0x66, 0x93};
+	uint8_t rx[3] = {0};
+	uint16_t v = 0;
+
+	xSemaphoreTake(mtx_i2cHandle,portMAX_DELAY);
+	if(HAL_I2C_Master_Transmit(&hi2c1, SGP40_ADDR, cmd, 8, 50) == HAL_OK){
+		xSemaphoreGive(mtx_i2cHandle);
+		vTaskDelay(pdMS_TO_TICKS(35));
+		xSemaphoreTake(mtx_i2cHandle,portMAX_DELAY);
+
+		if(HAL_I2C_Master_Receive(&hi2c1, SGP40_ADDR, cmd, 8, 50) == HAL_OK){
+			v = (uint16_t)((rx[0] << 8) | rx[1] );
+		}
+	}
+	xSemaphoreGive(mtx_i2cHandle);
+	return v;
+}
+
+uint16_t Lire_QA(){
+	uint16_t raw = 0;
+
+	// On fait 10 mesures pour satbliliser la sortie
+	for (int i = 0; i < 10; ++i) {
+		raw = QA_Init();
+		vTaskDelay(pdMS_TO_TICKS(1000));
+	}
+	if(raw == 0){ // erreur lecture
+		return 0;
+	}
+
+	if(raw > sgp40_baseline){
+		sgp40_baseline = raw;
+	}
+	return sgp40_baseline - raw; // donc 0 = pur et val elevé = pollué
+}
+
+// TOF
+void ToF_Init(){}
+
+bool ToF_Lire(uint16_t distances[NB_TOF]){
+	return false;
+}
+
+uint16_t Calcul_QS(const uint16_t distances[NB_TOF]){
+	return 0;
+}
+
+
+
+void task_acq_luminosite(void *pvParameters){
+	TickType_t  dernier = xTaskGetTickCount();
+
+	while(1){
+		uint16_t lumi = Lire_Luminosite();
+
+		xSemaphoreTake(mtx_infosHandle,portMAX_DELAY);
+		infos_acq.luminosite = lumi;
+		xQueueOverwrite(InfosHandle,&infos_acq);
+		xSemaphoreGive(mtx_infosHandle);
+
+		vTaskDelayUntil(&dernier, pdMS_TO_TICKS(PERIODE_ACQ_MS));
+	}
+}
+
+void task_acq_temp_qa(void *pvParameters){
+	TickType_t  dernier = xTaskGetTickCount();
+
+	while(1){
+		uint16_t temp = Lire_Temperature();
+		uint16_t qa = Lire_QA();
+
+		xSemaphoreTake(mtx_infosHandle,portMAX_DELAY);
+		infos_acq.temperature = temp;
+		infos_acq.qualite_air = qa;
+		xQueueOverwrite(InfosHandle,&infos_acq);
+		xSemaphoreGive(mtx_infosHandle);
+
+		vTaskDelayUntil(&dernier, pdMS_TO_TICKS(PERIODE_ACQ_MS));
+	}
+}
+
+void task_acq_tof(void *pvParameters){
+	TickType_t  dernier = xTaskGetTickCount();
+	uint16_t distances[NB_TOF] = {0};
+	ToF_Init();
+
+	while(1){
+		if(ToF_Lire(distances)){
+			uint16_t qs = Calcul_QS(distances);
+
+			xSemaphoreTake(mtx_infosHandle,portMAX_DELAY);
+			infos_acq.qualite_sommeil = qs;
+			xQueueOverwrite(InfosHandle,&infos_acq);
+			xSemaphoreGive(mtx_infosHandle);
+		}
+		vTaskDelayUntil(&dernier, pdMS_TO_TICKS(PERIODE_ACQ_MS));
+	}
+}
 
 /* USER CODE END 4 */
 
