@@ -17,14 +17,14 @@
  * @brief  Code function definitions for EwokPlus25 Platform Logging Layer
  */
 
-#include "../../../VL53L1_Nucleo/platform/inc/vl53l1_platform_log.h"
+#include "vl53l1_platform_log.h"
 
 #include <stdio.h>    // sprintf(), vsnprintf(), printf()
 #include <string.h>
 #include <stdarg.h>
 #include <malloc.h>
 
-#include "../../../VL53L1_Nucleo/platform/inc/vl53l1_platform_user_config.h"
+#include "vl53l1_platform_user_config.h"
 
 #ifdef VL53L1_LOG_ENABLE
 

@@ -9,17 +9,16 @@
  ******************************************************************************
  */
 
-#include "../../../VL53L1_Nucleo/core/inc/vl53l1_api.h"
+#include "vl53l1_api.h"
 
-#include "../../../VL53L1_Nucleo/core/inc/vl53l1_api_calibration.h"
-#include "../../../VL53L1_Nucleo/core/inc/vl53l1_api_core.h"
-#include "../../../VL53L1_Nucleo/core/inc/vl53l1_api_debug.h"
-#include "../../../VL53L1_Nucleo/core/inc/vl53l1_api_strings.h"
-#include "../../../VL53L1_Nucleo/core/inc/vl53l1_core.h"
-#include "../../../VL53L1_Nucleo/core/inc/vl53l1_preset_setup.h"
-#include "../../../VL53L1_Nucleo/core/inc/vl53l1_register_funcs.h"
-#include "../../../VL53L1_Nucleo/core/inc/vl53l1_register_settings.h"
-#include "../../../VL53L1_Nucleo/core/inc/vl53l1_wait.h"
+#include "vl53l1_api_core.h"
+#include "vl53l1_api_debug.h"
+#include "vl53l1_api_strings.h"
+#include "vl53l1_core.h"
+#include "vl53l1_preset_setup.h"
+#include "vl53l1_register_funcs.h"
+#include "vl53l1_register_settings.h"
+#include "vl53l1_wait.h"
 
 /* Check for minimum user zone requested by Xtalk calibration */
 /* no need for VL53L1_MAX_USER_ZONES check, set 5 to pass the test */

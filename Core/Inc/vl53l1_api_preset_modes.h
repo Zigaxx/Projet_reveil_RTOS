@@ -69,7 +69,7 @@
 #ifndef _VL53L1_API_PRESET_MODES_H_
 #define _VL53L1_API_PRESET_MODES_H_
 
-#include "../../../VL53L1_Nucleo/core/inc/vl53l1_ll_def.h"
+#include "vl53l1_ll_def.h"
 
 #ifdef __cplusplus
 extern "C" {

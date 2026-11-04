@@ -65,11 +65,11 @@
  * @brief  VL53L1 API functions for decoding error codes to a text string
  */
 
-#include "../../../VL53L1_Nucleo/core/inc/vl53l1_error_strings.h"
+#include "vl53l1_error_strings.h"
 
-#include "../../../VL53L1_Nucleo/core/inc/vl53l1_error_codes.h"
-#include "../../../VL53L1_Nucleo/core/inc/vl53l1_ll_def.h"
-#include "../../../VL53L1_Nucleo/platform/inc/vl53l1_platform_log.h"
+#include "vl53l1_error_codes.h"
+#include "vl53l1_ll_def.h"
+#include "vl53l1_platform_log.h"
 
 #define LOG_FUNCTION_START(fmt, ...) \
 	_LOG_FUNCTION_START(VL53L1_TRACE_MODULE_API, fmt, ##__VA_ARGS__)

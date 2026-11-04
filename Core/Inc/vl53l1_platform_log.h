@@ -38,7 +38,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
 #ifdef VL53L1_LOG_ENABLE
-	#include "../../../VL53L1_Nucleo/platform/inc/vl53l1_platform_user_config.h"
+	#include "vl53l1_platform_user_config.h"
 
 	#ifdef _MSC_VER
 	#   define EWOKPLUS_EXPORTS  __declspec(dllexport)
@@ -46,7 +46,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 	#       define EWOKPLUS_EXPORTS
 	#endif
 
-	#include "../../../VL53L1_Nucleo/platform/inc/vl53l1_types.h"
+	#include "vl53l1_types.h"
 
 	#ifdef __cplusplus
 	extern "C" {

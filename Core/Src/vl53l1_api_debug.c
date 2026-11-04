@@ -65,12 +65,12 @@
  * @brief EwokPlus25 low level Driver debug function definition
  */
 
-#include "../../../VL53L1_Nucleo/core/inc/vl53l1_api_debug.h"
+#include "vl53l1_api_debug.h"
 
-#include "../../../VL53L1_Nucleo/core/inc/vl53l1_core.h"
-#include "../../../VL53L1_Nucleo/core/inc/vl53l1_ll_def.h"
-#include "../../../VL53L1_Nucleo/core/inc/vl53l1_ll_device.h"
-#include "../../../VL53L1_Nucleo/core/inc/vl53l1_register_structs.h"
+#include "vl53l1_core.h"
+#include "vl53l1_ll_def.h"
+#include "vl53l1_ll_device.h"
+#include "vl53l1_register_structs.h"
 
 #define LOG_FUNCTION_START(fmt, ...) \
 	_LOG_FUNCTION_START(VL53L1_TRACE_MODULE_CORE, fmt, ##__VA_ARGS__)

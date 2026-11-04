@@ -12,9 +12,9 @@
 #ifndef _VL53L1_API_H_
 #define _VL53L1_API_H_
 
-#include "../../../VL53L1_Nucleo/core/inc/vl53l1_api_core.h"
-#include "../../../VL53L1_Nucleo/core/inc/vl53l1_api_strings.h"
-#include "../../../VL53L1_Nucleo/core/inc/vl53l1_preset_setup.h"
+#include "vl53l1_api_core.h"
+#include "vl53l1_api_strings.h"
+#include "vl53l1_preset_setup.h"
 
 #ifdef __cplusplus
 extern "C"

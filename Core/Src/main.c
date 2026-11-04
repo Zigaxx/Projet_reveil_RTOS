@@ -62,6 +62,8 @@ TIM_HandleTypeDef htim5;
 TIM_HandleTypeDef htim8;
 
 osThreadId defaultTaskHandle;
+
+#define TAILLE_MAX_MSG_BLUETOOTH 20
 /* USER CODE BEGIN PV */
 typedef struct
 {
@@ -89,6 +91,10 @@ typedef struct
 typedef enum {
 	CMD_SET_AFFICHAGE, CMD_SET_MELODIE, CMD_BUETOOTH, CMD_SET_CREPUSCULE, CMD_SNOOZE, CMD_STOP_REVEIL
 } CommandeType;
+
+typedef enum {
+	CMD_SET_HEURE, CMD_SET_ALARM, CMD_SEUIL_LUMI, CMD_SEUIL_QA, CMD_SEUIL_TEMP
+} CommandeBluetoothType;
 
 typedef struct {
     CommandeType type;
@@ -130,64 +136,134 @@ uint16_t time_tof1;
 uint16_t time_tof2;
 
 uint8_t bluetoothChar;
-char bluetoothMsg[20];
+char bluetoothMsg[TAILLE_MAX_MSG_BLUETOOTH];
 uint8_t indexBluetoothMsg;
 
-
-/*
-static char *trim(char *s)
+bool CommandBlutoothTypeExtraction(char *cmd, uint8_t *index, char *commandType)
 {
-    while (isspace((unsigned char)*s)) s++;
-    char *fin = s + strlen(s);
-    while (fin > s && isspace((unsigned char)fin[-1])) *--fin = '\0';
-    return s;
+	bool haveCommand = true; //inversé par rapport au nom
+	while(haveCommand)
+	{
+		if(cmd[*index] == '\r' || cmd[*index] == '\n' || cmd[*index] == '\0' || *index >= TAILLE_MAX_MSG_BLUETOOTH)
+		{
+			return false; // la commande n'est pas valide
+		}
+		if(cmd[*index] != ' ')
+		{
+			commandType[*index] = cmd[*index];
+			*index += 1;
+		}
+		else
+		{
+			haveCommand = false;
+		}
+	}
+
+	//ajout caractère fin de mot
+	commandType[*index] = '\0';
+
+	return true;
 }
 
-// "h:min:sec" -> secondes depuis minuit
-static bool parseHMS(const char *v, int32_t *secondes)
+
+bool ChooseBluetoothCommandType(char * cmd, CommandeBluetoothType *type)
 {
-    int h, m, s;
-    char extra;
-    if (sscanf(v, "%d:%d:%d %c", &h, &m, &s, &extra) != 3) return false;
-    if (h < 0 || h > 23 || m < 0 || m > 59 || s < 0 || s > 59) return false;
-    *secondes = h * 3600 + m * 60 + s;
-    return true;
+	if (strcmp(cmd, "luminosite") == 0) {
+		*type = CMD_SEUIL_LUMI;
+	}
+	else if (strcmp(cmd, "temperature") == 0) {
+		*type = CMD_SEUIL_TEMP;
+	}
+	else if (strcmp(cmd, "QA") == 0) {
+		*type = CMD_SEUIL_QA;
+	}
+	else if (strcmp(cmd, "heure") == 0) {
+		*type = CMD_SET_HEURE;
+	}
+	else if (strcmp(cmd, "alarme") == 0) {
+		*type = CMD_SET_ALARM;
+	}
+	else
+	{
+		return false; // Commande inconnue
+	}
+
+	return true;
 }
 
-static bool parseEntier(const char *v, int32_t min, int32_t max, int32_t *out)
+bool TimeExtraction(char *cmd, uint8_t *index, Heure *value)
 {
-    char *fin;
-    long x = strtol(v, &fin, 10);
-    if (fin == v || *fin != '\0' || x < min || x > max) return false;
-    *out = (int32_t)x;
-    return true;
+	//récupérer heure, avancer, récupérer min avancer, récupérer sec
+	value->h = atoi(&cmd[*index]);
+
+	while (cmd[*index] != ':')
+	{
+		if(cmd[*index] == '\r' || cmd[*index] == '\n' || cmd[*index] == '\0' || *index >= TAILLE_MAX_MSG_BLUETOOTH) //vérification du pour ne pas tomber dans une erreur ou boucle infinie
+		{
+			return false;
+		}
+		*index += 1;
+	}
+	*index += 1; // pour sauter le ':'
+
+	value->min = atoi(&cmd[*index]);
+	while (cmd[*index] != ':')
+	{
+		if(cmd[*index] == '\r' || cmd[*index] == '\n' || cmd[*index] == '\0' || *index >= TAILLE_MAX_MSG_BLUETOOTH) //vérification du pour ne pas tomber dans une erreur ou boucle infinie
+		{
+			return false;
+		}
+		*index += 1;
+	}
+	*index += 1; // pour sauter le ':'
+
+	value->sec = atoi(&cmd[*index]);
+
+	return true;
 }
 
-static void TraiterLigne(char *ligne)
+
+bool SplitCommandBluetooth(char * cmd, int *seuil, Heure *horaire)
 {
-    char *sep = strchr(ligne, '=');
-    if (sep == NULL) { Repondre("ERR\r\n"); return; }
 
-    *sep = '\0';
-    char *nom = trim(ligne);
-    char *val = trim(sep + 1);
-    for (char *p = nom; *p; p++) *p = (char)tolower((unsigned char)*p);
+	//1ère partie: extraction du type de la commande
+	uint8_t indexmsg = 0; // index qui évolue au fil de l'évolution des fonctions, c'est voulu !!!
+	char msgCommandType[TAILLE_MAX_MSG_BLUETOOTH];
 
-    Commande cmd;
-    int32_t  v;
+	if( !CommandBlutoothTypeExtraction(cmd, &indexmsg, msgCommandType))
+	{
+		return false;
+	}
 
-    if      (strcmp(nom, "heure") == 0       && parseHMS(val, &v))           cmd.type = CMD_HEURE;
-    else if (strcmp(nom, "alarme") == 0      && parseHMS(val, &v))           cmd.type = CMD_ALARME;
-    else if (strcmp(nom, "temperature") == 0 && parseEntier(val, -40, 125, &v)) cmd.type = CMD_SEUIL_TEMP;
-    else if (strcmp(nom, "qa") == 0          && parseEntier(val, 0, 100, &v))   cmd.type = CMD_SEUIL_QA;
-    else if (strcmp(nom, "luminosite") == 0  && parseEntier(val, 0, 100, &v))   cmd.type = CMD_SEUIL_LUM;
-    else { Repondre("ERR\r\n"); return; }
+	//2e partie conversion du type de commande
+	CommandeBluetoothType cmdBlueType;
 
-    cmd.data = v;
-    if (xQueueSend(xQueueCommandes, &cmd, 0) == pdPASS) Repondre("OK\r\n");
-    else                                                 Repondre("BUSY\r\n");
+	if(!ChooseBluetoothCommandType(msgCommandType,&cmdBlueType) )
+		return false;
+
+
+	//3e partie décodage de la valeur
+
+	//a. on avance jusqu'à la valeur
+	while (cmd[indexmsg] == ' ' || cmd[indexmsg] == '=')
+	{
+		indexmsg += 1;
+	}
+
+	//b on sépare selon le type
+	if(cmdBlueType == CMD_SEUIL_LUMI || cmdBlueType == CMD_SEUIL_TEMP || cmdBlueType == CMD_SEUIL_QA) // on a reçu un seuil
+	{
+		*seuil = atoi(&cmd[indexmsg]);
+	}
+	else if(!TimeExtraction(cmd, &indexmsg, horaire) )
+	{
+		return false;
+	}
+
+
+	return true;
 }
-*/
+
 /* USER CODE END 0 */
 
 /**

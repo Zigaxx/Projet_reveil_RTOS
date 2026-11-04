@@ -68,8 +68,8 @@
 #ifndef _VL53L1_REGISTER_STRUCTS_H_
 #define _VL53L1_REGISTER_STRUCTS_H_
 
-#include "../../../VL53L1_Nucleo/core/inc/vl53l1_register_map.h"
-#include "../../../VL53L1_Nucleo/platform/inc/vl53l1_types.h"
+#include "vl53l1_register_map.h"
+#include "vl53l1_types.h"
 
 #define VL53L1_STATIC_NVM_MANAGED_I2C_INDEX               VL53L1_I2C_SLAVE__DEVICE_ADDRESS
 #define VL53L1_CUSTOMER_NVM_MANAGED_I2C_INDEX             VL53L1_GLOBAL_CONFIG__SPAD_ENABLES_REF_0

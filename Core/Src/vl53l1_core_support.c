@@ -66,13 +66,13 @@
  * @brief EwokPlus25 core function definition
  */
 
-#include "../../../VL53L1_Nucleo/core/inc/vl53l1_core_support.h"
+#include "vl53l1_core_support.h"
 
-#include "../../../VL53L1_Nucleo/core/inc/vl53l1_ll_def.h"
-#include "../../../VL53L1_Nucleo/core/inc/vl53l1_ll_device.h"
-#include "../../../VL53L1_Nucleo/platform/inc/vl53l1_platform_log.h"
-#include "../../../VL53L1_Nucleo/platform/inc/vl53l1_platform_user_data.h"
-#include "../../../VL53L1_Nucleo/platform/inc/vl53l1_platform_user_defines.h"
+#include "vl53l1_ll_def.h"
+#include "vl53l1_ll_device.h"
+#include "vl53l1_platform_log.h"
+#include "vl53l1_platform_user_data.h"
+#include "vl53l1_platform_user_defines.h"
 
 #ifdef VL53L1_LOGGING
 #include "vl53l1_debug.h"
