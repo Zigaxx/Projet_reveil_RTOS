@@ -50,9 +50,9 @@ typedef struct
 	bool activer_alarme;
 	bool activer_crepuscule;
 	bool activer_retroeclairage;
-	uint16_t seuil_luminosite;
-	uint16_t seuil_temperature;
-	uint16_t seuil_qa;
+	int seuil_luminosite;
+	int seuil_temperature;
+	int seuil_qa;
 } Consignes;
 
 typedef enum {
@@ -142,9 +142,8 @@ void StartDefaultTask(void const * argument);
 bool CommandBlutoothTypeExtraction(char *cmd, uint8_t *index, char *commandType);
 bool ChooseBluetoothCommandType(char * cmd, CommandeBluetoothType *type);
 bool TimeExtraction(char *cmd, uint8_t *index, Heure *value);
-bool SplitCommandBluetooth(char * cmd, int *seuil, Heure *horaire);
+bool SplitCommandBluetooth(char * cmd, int *seuil, Heure *horaire, CommandeBluetoothType *type);
 
-void ReadCommandTask(void *argument);
 void TofTask(void *argument);
 void GestionCommandTask (void *pvParameters);
 /* USER CODE END PFP */
@@ -155,11 +154,6 @@ void GestionCommandTask (void *pvParameters);
 Consignes consignes;
 Heure heure = {0,0,0};
 Heure alarme = {0,0,0};
-
-int seuilTest;
-CommandeBluetoothType cmdBluetoothTypeTest;
-
-Commande ReceivedCommand;
 
 uint8_t bluetoothChar;
 char bluetoothMsg[TAILLE_MAX_MSG_BLUETOOTH];
@@ -228,7 +222,6 @@ bool ChooseBluetoothCommandType(char * cmd, CommandeBluetoothType *type)
 	{
 		return false; // Commande inconnue
 	}
-	cmdBluetoothTypeTest = *type;
 	return true;
 }
 
@@ -264,7 +257,7 @@ bool TimeExtraction(char *cmd, uint8_t *index, Heure *value)
 }
 
 
-bool SplitCommandBluetooth(char * cmd, int *seuil, Heure *horaire)
+bool SplitCommandBluetooth(char * cmd, int *seuil, Heure *horaire, CommandeBluetoothType *type)
 {
 
 	//1ère partie: extraction du type de la commande
@@ -277,9 +270,8 @@ bool SplitCommandBluetooth(char * cmd, int *seuil, Heure *horaire)
 	}
 
 	//2e partie conversion du type de commande
-	CommandeBluetoothType cmdBlueType;
 
-	if(!ChooseBluetoothCommandType(msgCommandType,&cmdBlueType) )
+	if(!ChooseBluetoothCommandType(msgCommandType,type) )
 		return false;
 
 
@@ -292,7 +284,7 @@ bool SplitCommandBluetooth(char * cmd, int *seuil, Heure *horaire)
 	}
 
 	//b on sépare selon le type
-	if(cmdBlueType == CMD_SEUIL_LUMI || cmdBlueType == CMD_SEUIL_TEMP || cmdBlueType == CMD_SEUIL_QA) // on a reçu un seuil
+	if(*type == CMD_SEUIL_LUMI || *type == CMD_SEUIL_TEMP || *type == CMD_SEUIL_QA) // on a reçu un seuil
 	{
 		*seuil = atoi(&cmd[indexmsg]);
 	}
@@ -428,12 +420,6 @@ int main(void)
 	defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
-  xTaskCreate(      ReadCommandTask,       /* Function that implements the task. */
-                      "ReadCommand",          /* Text name for the task. */
-                      1024,      /* Stack size in words, not bytes. */
-                      NULL,    /* Parameter passed into the task. */
-                      tskIDLE_PRIORITY+1,/* Priority at which the task is created. */
-                      NULL );      /* Used to pass out the created task's handle. */
   xTaskCreate(      TofTask,       /* Function that implements the task. */
                       "TofTask",          /* Text name for the task. */
                       1024,      /* Stack size in words, not bytes. */
@@ -1105,19 +1091,45 @@ void GestionCommandTask (void *pvParameters)
 
 		switch (cmd.type)
 		{
-		/*
-		case CMD_SET_HEURE:
-			xSemaphoreTake(HeureMutexSemaphHandle, portMAX_DELAY);
-			heure = cmd.data.heure;
-			xSemaphoreGive(HeureMutexSemaphHandle);
+		case CMD_BUETOOTH:
+
+			int seuil;
+			Heure horaire;
+			CommandeBluetoothType cmdType;
+			SplitCommandBluetooth(cmd.str,&seuil, &horaire, &cmdType);
+
+			switch (cmdType)
+			{
+			case CMD_SET_HEURE:
+				xSemaphoreTake(HeureMutexSemaphHandle, portMAX_DELAY);
+				heure = horaire;
+				xSemaphoreGive(HeureMutexSemaphHandle);
+				break;
+			case CMD_SET_ALARM:
+				xSemaphoreTake(AlarmeMutexSemaphHandle, portMAX_DELAY);
+				alarme = horaire;
+				xSemaphoreGive(AlarmeMutexSemaphHandle);
+				break;
+			case CMD_SEUIL_LUMI:
+				xSemaphoreTake(ConsignesMutexSemaphHandle, portMAX_DELAY);
+				consignes.seuil_luminosite = seuil;
+				xSemaphoreGive(ConsignesMutexSemaphHandle);
+				break;
+			case CMD_SEUIL_QA:
+				xSemaphoreTake(ConsignesMutexSemaphHandle, portMAX_DELAY);
+				consignes.seuil_qa = seuil;
+				xSemaphoreGive(ConsignesMutexSemaphHandle);
+				break;
+			case CMD_SEUIL_TEMP:
+				xSemaphoreTake(ConsignesMutexSemaphHandle, portMAX_DELAY);
+				consignes.seuil_temperature = seuil;
+				xSemaphoreGive(ConsignesMutexSemaphHandle);
+				break;
+			default:
+				break;
+			}
 			break;
 
-		case CMD_SET_ALARME:
-			xSemaphoreTake(AlarmeMutexSemaphHandle, portMAX_DELAY);
-			alarme = cmd.data.heure;
-			xSemaphoreGive(AlarmeMutexSemaphHandle);
-			break;
-		*/
 		case CMD_SET_AFFICHAGE:
 			if(consignes.sel_affichage >= MAX_SEL_AFFICHAGE)
 			{
@@ -1153,25 +1165,7 @@ void GestionCommandTask (void *pvParameters)
 			consignes.activer_crepuscule = true;
 			xSemaphoreGive(ConsignesMutexSemaphHandle);
 			break;
-		/*
-		case CMD_SET_SEUIL_LUMI:
-			xSemaphoreTake(ConsignesMutexSemaphHandle, portMAX_DELAY);
-			consignes.seuil_luminosite = cmd.data.valeur;
-			xSemaphoreGive(ConsignesMutexSemaphHandle);
-			break;
 
-		case CMD_SET_SEUIL_QA:
-			xSemaphoreTake(ConsignesMutexSemaphHandle, portMAX_DELAY);
-			consignes.seuil_qa = cmd.data.valeur;
-			xSemaphoreGive(ConsignesMutexSemaphHandle);
-			break;
-
-		case CMD_SET_SEUIL_TEMP:
-			xSemaphoreTake(ConsignesMutexSemaphHandle, portMAX_DELAY);
-			consignes.seuil_temperature = cmd.data.valeur;
-			xSemaphoreGive(ConsignesMutexSemaphHandle);
-			break;
-		*/
 		case CMD_SNOOZE:
 			xSemaphoreTake(ConsignesMutexSemaphHandle, portMAX_DELAY);
 			consignes.snooze_alarme = true;
@@ -1186,24 +1180,6 @@ void GestionCommandTask (void *pvParameters)
 
 		default:
 			break;
-		}
-	}
-}
-
-void ReadCommandTask(void *argument)
-{
-	Commande cmd;
-
-
-	while(1)
-	{
-		xQueueReceive(xQueueCommandes, &cmd,portMAX_DELAY);
-
-		ReceivedCommand = cmd;
-
-		if(cmd.type == CMD_BUETOOTH)
-		{
-			SplitCommandBluetooth(cmd.str, &seuilTest, &heure);
 		}
 	}
 }
