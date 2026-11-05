@@ -57,7 +57,7 @@
 #define BALAYAGE_MAX 5000       // sécurité si l'encodeur ne répond pas
 #define PERIODE_HORLOGE  1000#define DUREE_AUBE 30000
 #define DUREE_CREP 30000
-#define PERIODE_MAJ_LED 100
+#define PERIODE_MAJ_LED 100#define SNOOZE_MIN  10 // Temps du snooze du reveil
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -103,7 +103,7 @@ typedef struct
 	uint16_t sel_affichage;
 	uint16_t sel_melodie;
 	Heure alarme;
-	bool stop_alamre;
+	bool stop_alarme;
 	bool snooze_alarme;
 	bool activer_alarme;
 	bool activer_crepuscule;
@@ -271,6 +271,44 @@ QueueHandle_t AffHandle;
 
 // FONCTIONS
 void aff_led(uint8_t niveau);
+
+typedef struct
+{
+	bool set_seuil_lumi;
+	bool set_seuil_temp;
+	bool set_seuil_qa;
+	bool set_heure;
+	bool set_alarme;
+	bool set_crep;
+	bool set_stop_reveil;
+	bool set_snooze;
+	bool set_melodie;
+	bool set_affichage;
+} Commandes;
+
+typedef struct
+{
+	bool act_rafraichissement;
+	bool act_balayage;
+	bool act_alarme;        // true = sonner, false = couper
+	bool alarme_valide; 	// Provisoire Signal d'ordre
+}Actions;
+
+// DECLARATION TACHES
+xTaskHandle xTaskGestionAlarme;
+
+void task_gestion_alarme(void *pvParameters);
+// DECLARATION SEMAPHORES
+xSemaphoreHandle sem_alarmeHandle;
+xSemaphoreHandle mtx_consignesHandle;
+
+// MAILBOXES
+QueueHandle_t ActionsHandle;
+
+// FONCTIONS
+void Act_alarme(bool on); // Activer la melodie de l'alarme
+Heure Set_alarme(Heure base,int delta); // Reglage de l'alarme (le snooze y compris)
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -373,6 +411,7 @@ int main(void)
   /* add queues, ... */
   InfosHandle = xQueueCreate(1, sizeof(Infos) );
   AffHandle = xQueueCreate(4, sizeof(Affichages) );
+  ActionsHandle = xQueueCreate(4, sizeof( int) );
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
@@ -429,6 +468,12 @@ int main(void)
 			tskIDLE_PRIORITY+8,/* Priority at which the task is created. */
 			&xTaskGestionAffCrepAube );      /* Used to pass out the created task's handle. */
 
+  xTaskCreate(task_gestion_alarme,       /* Function that implements the task. */
+                          "TASK_GESTION_ALARME",          /* Text name for the task. */
+                          1024,      /* Stack size in words, not bytes. */
+                          NULL,    /* Parameter passed into the task. */
+                          tskIDLE_PRIORITY+10,/* Priority at which the task is created. */
+  						&xTaskGestionAlarme  );      /* Used to pass out the created task's handle. */
   /* add threads, ... */
   /* USER CODE END RTOS_THREADS */
 
@@ -1075,504 +1120,79 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-uint16_t ADC_Lire(uint32_t canal){
-	uint8_t valeur[2];
 
-	xSemaphoreTake(mtx_adcHandle,portMAX_DELAY);
-	HAL_ADC_Start(&hadc1);
-	for (int i = 0; i < 2; i++) {
-		if(HAL_ADC_PollForConversion(&hadc1,10) == HAL_OK){
-			valeur[i] = (uint16_t)HAL_ADC_GetValue(&hadc1);
-		}
-	}
-	HAL_ADC_Stop(&hadc1);
-
-	xSemaphoreGive(mtx_adcHandle);
-	return valeur[canal];
-}
-
-uint16_t Lire_Luminosite(){
-	return ADC_Lire(LDR_ADC);
-}
-
-void Temp_Init(){
-	uint8_t tx[2] = {0x80,0x00}; //
-	HAL_GPIO_WritePin(CE_GPIO_Port, CE_Pin, GPIO_PIN_SET);
-	HAL_SPI_Transmit(&hspi2, tx, 2, 10);
-	HAL_GPIO_WritePin(CE_GPIO_Port, CE_Pin, GPIO_PIN_RESET);
-	vTaskDelay(pdMS_TO_TICKS(200)); // attente de 150 ms + marge
-}
-
-uint16_t Lire_Temperature(){
-	uint16_t  derniere = 0;
-	uint8_t tx[4] = {0x02,0,0,0}; // Addr lecture, MSB, LSB, Control bytes
-	uint8_t rx[4] = {0};
-
-	HAL_GPIO_WritePin(CE_GPIO_Port, CE_Pin, GPIO_PIN_SET);
-	HAL_StatusTypeDef st = HAL_SPI_TransmitReceive(&hspi2, tx, rx, 4, 10);
-	HAL_GPIO_WritePin(CE_GPIO_Port, CE_Pin, GPIO_PIN_RESET);
-
-	if(st == HAL_OK){
-		int8_t msb = (int8_t)rx[1];
-		temp_comp_c = msb;
-		derniere = (msb < 0) ? 0 : (uint16_t)msb;
-	}
-
-	return derniere;
-}
-
-uint16_t QA_Init(){
-	uint8_t cmd[8] = {0x26, 0x0F, 0x80, 0x00, 0xA2, 0x66, 0x66, 0x93};
-	uint8_t rx[3] = {0};
-	uint16_t v = 0;
-
-	xSemaphoreTake(mtx_i2cHandle,portMAX_DELAY);
-	if(HAL_I2C_Master_Transmit(&hi2c1, SGP40_ADDR, cmd, 8, 50) == HAL_OK){
-		xSemaphoreGive(mtx_i2cHandle);
-		vTaskDelay(pdMS_TO_TICKS(35));
-		xSemaphoreTake(mtx_i2cHandle,portMAX_DELAY);
-
-		if(HAL_I2C_Master_Receive(&hi2c1, SGP40_ADDR, cmd, 8, 50) == HAL_OK){
-			v = (uint16_t)((rx[0] << 8) | rx[1] );
-		}
-	}
-	xSemaphoreGive(mtx_i2cHandle);
-	return v;
-}
-
-uint16_t Lire_QA(){
-	uint16_t raw = 0;
-
-	// On fait 10 mesures pour satbliliser la sortie
-	for (int i = 0; i < 10; ++i) {
-		raw = QA_Init();
-		vTaskDelay(pdMS_TO_TICKS(1000));
-	}
-	if(raw == 0){ // erreur lecture
-		return 0;
-	}
-
-	if(raw > sgp40_baseline){
-		sgp40_baseline = raw;
-	}
-	return sgp40_baseline - raw; // donc 0 = pur et val elevé = pollué
-}
-
-// TOF
-void ToF_Init(){}
-
-bool ToF_Lire(uint16_t distances[NB_TOF]){
-	return false;
-}
-
-uint16_t Calcul_QS(const uint16_t distances[NB_TOF]){
-	return 0;
-}
-
-
-
-void task_acq_luminosite(void *pvParameters){
-	TickType_t  dernier = xTaskGetTickCount();
-
-	while(1){
-		uint16_t lumi = Lire_Luminosite();
-
-		xSemaphoreTake(mtx_infosHandle,portMAX_DELAY);
-		infos_acq.luminosite = lumi;
-		xQueueOverwrite(InfosHandle,&infos_acq);
-		xSemaphoreGive(mtx_infosHandle);
-
-		vTaskDelayUntil(&dernier, pdMS_TO_TICKS(PERIODE_ACQ_MS));
-	}
-}
-
-void task_acq_temp_qa(void *pvParameters){
-	TickType_t  dernier = xTaskGetTickCount();
-
-	while(1){
-		uint16_t temp = Lire_Temperature();
-		uint16_t qa = Lire_QA();
-
-		xSemaphoreTake(mtx_infosHandle,portMAX_DELAY);
-		infos_acq.temperature = temp;
-		infos_acq.qualite_air = qa;
-		xQueueOverwrite(InfosHandle,&infos_acq);
-		xSemaphoreGive(mtx_infosHandle);
-
-		vTaskDelayUntil(&dernier, pdMS_TO_TICKS(PERIODE_ACQ_MS));
-	}
-}
-
-void task_acq_tof(void *pvParameters){
-	TickType_t  dernier = xTaskGetTickCount();
-	uint16_t distances[NB_TOF] = {0};
-	ToF_Init();
-
-	while(1){
-		if(ToF_Lire(distances)){
-			uint16_t qs = Calcul_QS(distances);
-
-			xSemaphoreTake(mtx_infosHandle,portMAX_DELAY);
-			infos_acq.qualite_sommeil = qs;
-			xQueueOverwrite(InfosHandle,&infos_acq);
-			xSemaphoreGive(mtx_infosHandle);
-		}
-		vTaskDelayUntil(&dernier, pdMS_TO_TICKS(PERIODE_ACQ_MS));
-	}
-}
-
-uint16_t ADC_Lire(uint32_t canal){
-	uint8_t valeur[2];
-
-	xSemaphoreTake(mtx_adcHandle,portMAX_DELAY);
-	HAL_ADC_Start(&hadc1);
-	for (int i = 0; i < 2; i++) {
-		if(HAL_ADC_PollForConversion(&hadc1,10) == HAL_OK){
-			valeur[i] = (uint16_t)HAL_ADC_GetValue(&hadc1);
-		}
-	}
-	HAL_ADC_Stop(&hadc1);
-
-	xSemaphoreGive(mtx_adcHandle);
-	return valeur[canal];
-}
-// Buzzer
-void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim){
-	if(htim->Instance == TIM3){
-		BaseType_t woken = pdFALSE;
-		xSemaphoreGiveFromISR(sem_ledHandle,&woken);
-		portYIELD_FROM_ISR(woken);
-	}
-}
-
-void Buzzer_Note(uint16_t freq){
-	if(freq == 0){
-		__HAL_TIM_SET_COMPARE(&htim2,TIM_CHANNEL_1,0);
-	}
-	else{
-		uint32_t arr = 1000000/freq -1;
-		__HAL_TIM_SET_AUTORELOAD(&htim8,arr);
-		__HAL_TIM_SET_COMPARE(&htim2,TIM_CHANNEL_1,arr/2); // On mets le volume à 50 %
-	}
-}
-
-TickType_t Delai(TickType_t echeance, TickType_t now){
-	int d = echeance - now;
-	if(d > 0){
-		return (TickType_t)d;
-	}
-	return 0;
-}
-
-// Affichaes
-void Leds_Envoyer(uint8_t niveau){
-	uint32_t n = ((uint32_t)niveau * niveau) / 255;
-	uint32_t r = n;
-	uint32_t g = (n * 150) / 255;
-	uint32_t b = (n * 30) / 255;
-	uint32_t grb = (g << 16) | (r << 8) | b;
-
-	for (int i = 0; i < NB_LEDS; i++) {
-		for (int j = 0; j < 24; ++j) {
-			led_buffer[i*24 + j] = (grb & (1UL << (23 - j))) ? LED_T1 : LED_T0;
-		}
-	}
-
-	for (int i = 0; i < LED_RESET_SLOTS; ++i) {
-		led_buffer[LED_BITS + i] = 0;
-	}
-
-	HAL_TIM_PWM_Start_DMA(&htim3, TIM_CHANNEL_4, (uint32_t*)led_buffer, LED_BITS + LED_RESET_SLOTS);
-	xSemaphoreTake(sem_ledHandle, pdMS_TO_TICKS(20));
-	HAL_TIM_PWM_Stop_DMA(&htim3, TIM_CHANNEL_4);
-}
-
-
-
-void Ecran_Afficher(const Affichages *a){
-	char l1[16], l2[20];
-
-	snprintf(l1, sizeof(l1), "%02u:%02u:%02u",
-			(unsigned)a->ecran_heure.h, (unsigned)a->ecran_heure.min, (unsigned)a->ecran_heure.sec);
-
-	switch (a->ecran_sel) {
-		case 1:
-			snprintf(l2, sizeof(l2), "Temp: %u C", (unsigned)a->ecran_valeur);
-			break;
-		case 2:
-			snprintf(l2, sizeof(l2), "QA: %u ppm", (unsigned)a->ecran_valeur);
-			break;
-		case 3:
-			snprintf(l2, sizeof(l2), "Sommeil: %u", (unsigned)a->ecran_valeur);
-			break;
-		default:
-			l2[0] = '\0';
-			break;
-	}
-
-	ssd1306_Fill(Black);
-	ssd1306_SetCursor(0, 0);
-	ssd1306_WriteString(l1, Font_11x18, White);
-	ssd1306_SetCursor(0, 30);
-	ssd1306_WriteString(l2, Font_11x18, White);
-	ssd1306_SetContrast(a->ecran_retro ? 0xFF : 0x40);
-	xSemaphoreTake(mtx_i2cHandle, portMAX_DELAY);
-	ssd1306_UpdateScreen();
-	xSemaphoreGive(mtx_i2cHandle);
-}
-
-// Ventilateur
-void Vent_Marche(){
-	uint16_t pot = ADC_Lire(ADC_CHANNEL_11);
-	__HAL_TIM_SET_COMPARE(&htim2,TIM_CHANNEL_1,(uint32_t)pot * 3999 / 4095);
-	HAL_GPIO_WritePin(DIS_GPIO_Port, DIS_Pin, GPIO_PIN_RESET); // activation du moteur
-}
-
-void Vent_Arret(){
-	__HAL_TIM_SET_COMPARE(&htim2,TIM_CHANNEL_1,0);
-	HAL_GPIO_WritePin(DIS_GPIO_Port, DIS_Pin, GPIO_PIN_SET); // désactivation du moteur
-}
-
-// Taches
-void task_interface_actions(void *pvParameters){
+// FONCTIONS //
+void Act_alarme(bool on){
 	Actions action;
-	bool sonne = false, balaye = false;
-	uint8_t mel, idx;
-	uint8_t sens = 1;
-	TickType_t t_note, t_bal, t_inversion;
+	action.alarme_valide = true;
+	action.act_alarme = on;
+	xQueueSend(ActionsHandle, &action, pdMS_TO_TICKS(100));
+}
+
+Heure Set_alarme(Heure base,int delta){
+	Heure alarme = base;
+	int total = base.h*60 + base.min + delta;
+	alarme.h = total / 60;
+	alarme.min = total % 60;
+	alarme.sec = base.sec;
+	return alarme;
+}
+
+// TACHES //
+
+void task_gestion_alarme(void *pvParameters){
+	Heure alarme_base;
+	bool snooze_actif = false;
 	while(1){
-		// Attente prochaine action
-		TickType_t now = xTaskGetTickCount();
-		TickType_t wait = portMAX_DELAY;
+		xSemaphoreTake(sem_alarmeHandle, portMAX_DELAY); // On bloque jusqu'au signla activer_alarme
 
-		if(sonne){
-			wait = Delai(t_note,now);
+		xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY); // Sauvegarde alarme de base
+		if(snooze_actif == false){
+			alarme_base = consignes.alarme;
 		}
 
-		if(balaye){
-			TickType_t d = Delai(t_bal,now);
-			if(d < wait){
-				wait = d;
-			}
-		}
-		// Reception ordre
-		if(action.ventilo_valide){
-			if (action.act_rafraichissement || action.act_balayage){
-				Vent_Marche();
-				balaye = action.act_balayage;
-				if(balaye){
-					__HAL_TIM_SET_COUNTER(&htim5,0);
-					sens =1;
-					HAL_GPIO_WritePin(DIR_GPIO_Port, DIR_Pin, GPIO_PIN_RESET);
-					t_bal = t_inversion = xTaskGetTickCount();
-				}
-			}
-			else{
-				balaye = false;
-				Vent_Arret();
-			}
-		}
-
-		if(action.alarme_valide){
-			if(action.act_alarme && !sonne){
-				xSemaphoreTake(mtx_consignesHandle,portMAX_DELAY);
-				if(consignes.sel_melodie < NB_MELODIES){
-					mel = consignes.sel_melodie;
-				}
-				else{
-					mel = 0;
-				}
-				xSemaphoreGive(mtx_consignesHandle);
-				idx = 0;
-				sonne = true;
-				HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_4);
-				t_note = xTaskGetTickCount();
-			}
-			else if(!action.act_alarme){
-				sonne = false;
-				HAL_TIM_PWM_Stop(&htim8, TIM_CHANNEL_4);
-			}
-		}
-		// Action
-		now = xTaskGetTickCount();
-
-		if(sonne && (now - t_note) >= 0){
-			const Note* n= &melodies[mel].notes[idx];
-			Buzzer_Note(n->feq);
-			t_note = now + pdMS_TO_TICKS(n->duree);
-			idx = (idx +1) % melodies[mel].nb;
-		}
-
-		if(balaye && (now - t_note) >= 0){
-			int pos = __HAL_TIM_GET_COUNTER(&htim5);
-			bool inverser = (sens > 0 && pos >= BALAYAGE_BORNE) ||
-							(sens < 0 && pos <= BALAYAGE_BORNE) ||
-							((now - t_inversion) > pdMS_TO_TICKS(BALAYAGE_MAX));
-
-			if(inverser){
-				sens = -sens;
-				HAL_GPIO_WritePin(DIR_GPIO_Port, DIR_Pin, (sens > 0) ? GPIO_PIN_RESET : GPIO_PIN_SET);
-				t_inversion = now;
-			}
-			Vent_Marche();
-			t_bal = now + pdMS_TO_TICKS(PERIODE_VENT_MS);
-		}
-
-	}
-}
-
-void task_interface_aff(void *pvParameters){
-	Affichages aff;
-	ssd1306_Init();
-
-	while(1){
-		if(xQueueReceive(AffHandle, &aff, portMAX_DELAY) == pdPASS){
-			if(aff.led_valide){
-				Leds_Envoyer(aff.led_niveau);
-			}
-
-			if(aff.ecran_valide){
-				Ecran_Afficher(&aff);
-			}
-		}
-	}
-}
-void Heure_Incrementer(Heure *h){
-	h->sec++;
-	if(h->sec >= 60){
-		h->sec = 0;
-		h->min++;
-	}
-	if(h->min >= 60){
-		h->min = 0;
-		h->h++;
-	}
-	if(h->h >= 24){
-		h->h++;
-	}
-}
-
-bool Heure_Egales(Heure a, Heure b){
-	if( (a.h == b.h) && (a.min == b.min) && (a.sec == b.sec)){
-		return true;
-	}
-	return false;
-}
-
-void Aff_ecran(Heure h, uint16_t sel, uint16_t valeur, bool retro){
-	Affichages aff;
-	aff.ecran_heure = h;
-	aff.ecran_sel = sel;
-	aff.ecran_valide = true;
-	aff.ecran_retro = retro;
-	aff.ecran_valeur = valeur;
-	xQueueSend(AffHandle, &aff, pdMS_TO_TICKS(10));   // si pleine, la MAJ de la seconde suivante rattrapera
-}
-
-void task_gestion_horloge(void *pvParameters){
-	TickType_t dernier = xTaskGetTickCount();
-	Infos infos;
-
-	while(1){
-		vTaskDelayUntil(&dernier, pdMS_TO_TICKS(PERIODE_HORLOGE));
-
-		// Incrementation heure
-		Heure h;
-		xSemaphoreTake(mtx_heureHandle, portMAX_DELAY);
-		Heure_Incrementer(&heure);
-		h = heure; // Copie locale pour la comparaison avec l'alarme
-		xSemaphoreGive(mtx_heureHandle);
-
-		bool mesure_ok = (xQueuePeek(InfosHandle, &infos, 0) == pdPASS); // dernières mesures (Peek, comme pour le ventilateur)
-
-		// Alarme
-		xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
-		bool declencher = Heure_Egales(h, consignes.alarme) && !consignes.activer_alarme;
-		if(declencher){
-			consignes.activer_alarme = true; // Pour la gestion de l'aube
-		}
-
-		// Retroeclairage
-		if(mesure_ok){
-			consignes.activer_retroeclairage = (infos.luminosite < consignes.seuil_luminosite);
-		}
-		bool retro = consignes.activer_retroeclairage;
-		uint8_t sel = consignes.sel_affichage;
+		consignes.stop_alarme = false;
+		consignes.snooze_alarme = false;
 		xSemaphoreGive(mtx_consignesHandle);
 
-		if(declencher){
-			xSemaphoreGive(sem_alarmeHandle); // reveil de la task de gestion d'alarme
-		}
-		// Selection affichage
-		uint8_t valeur =0;
-		switch(sel){
-			case 1: valeur = infos.temperature;
-			case 2: valeur = infos.qualite_air;
-			case 3: valeur = infos.qualite_sommeil;
-		}
-		// Actualisation ecran
-		Aff_ecran(h, sel, valeur, retro);
-	}
-}
-void aff_led(uint8_t niveau){
-	Affichages aff;
-	aff.led_valide = true;
-	aff.led_niveau = niveau;
-	xQueueSend(AffHandle, &aff, pdMS_TO_TICKS(100));
-}
+		Act_alarme(true);
 
-// Déclaration des fonctions
-
-static bool Alarme_active(){
-	xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
-	bool r = consignes.activer_alarme;
-	xSemaphoreGive(mtx_consignesHandle);
-	return r;
-}
-
-static bool Crep_active(){
-	xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
-	bool r = consignes.activer_crepuscule;
-	xSemaphoreGive(mtx_consignesHandle);
-	return r;
-}
-
-void task_gestion_aff_crep_aube(void *pvParameters){
-
-	while(1){
-		if(Alarme_active()){
-			uint32_t t = 0;
-
-			while(Alarme_active()){
-				if(t > DUREE_AUBE){
-					t = DUREE_AUBE;
-				}
-				aff_led((uint8_t)((t * 255) / DUREE_AUBE));
-				vTaskDelay(pdMS_TO_TICKS(PERIODE_MAJ_LED));
-				t += PERIODE_MAJ_LED;
-			}
-			aff_led(0);
-		}
-		else if(Crep_active()){
-			uint32_t t = 0;
-
-			while(t <= DUREE_CREP && Crep_active() && !Alarme_active()){
-				aff_led((uint8_t)(255 - (t * 255) / DUREE_CREP));
-				vTaskDelay(pdMS_TO_TICKS(PERIODE_MAJ_LED));
-				t += PERIODE_MAJ_LED;
-			}
-			aff_led(0);
+		// Attente stop ou snooze
+		bool fini = false;
+		while(fini != true){
+			bool stop,snooze;
 			xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
-			consignes.activer_crepuscule = false;
+			stop = consignes.stop_alarme;
+			snooze = consignes.snooze_alarme;
 			xSemaphoreGive(mtx_consignesHandle);
+
+			if(stop == true){
+				xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
+				if(snooze_actif == true){// Reconduite du reveil au lendemain
+					consignes.alarme = alarme_base;
+				}
+				consignes.activer_alarme = false;
+				consignes.stop_alarme = false;
+				xSemaphoreGive(mtx_consignesHandle);
+				snooze_actif = false;
+				fini = true;
+			}
+			else if(snooze == true){
+				xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
+				consignes.alarme = Set_alarme(alarme_base,SNOOZE_MIN);
+				consignes.activer_alarme = false;
+				consignes.stop_alarme = false;
+				xSemaphoreGive(mtx_consignesHandle);
+				snooze_actif = true;
+				fini = true;
+			}
+			else{
+				vTaskDelay(pdMS_TO_TICKS(50)); // Contuniation de la mélodie
+			}
 		}
-		else{
-			vTaskDelay(pdMS_TO_TICKS(PERIODE_MAJ_LED)); // Contuniation de la mélodie
-		}
+		Act_alarme(false);
 	}
 }
-
-
 /* USER CODE END 4 */
 
 /* USER CODE BEGIN Header_StartDefaultTask */
