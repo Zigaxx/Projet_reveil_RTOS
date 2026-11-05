@@ -24,8 +24,11 @@
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
 #include <stdlib.h>
-#include "ssd1306.h"
 #include <stdbool.h>
+#include "ssd1306.h"
+
+#include "app_types.h"
+#include "app_rtos.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -62,28 +65,7 @@ TIM_HandleTypeDef htim8;
 
 osThreadId defaultTaskHandle;
 /* USER CODE BEGIN PV */
-typedef struct
-{
-	uint16_t h;
-	uint16_t min;
-	uint16_t sec;
-} Heure;
 
-typedef struct
-{
-	uint16_t vitesse_ventilo;
-	uint16_t sel_affichage;
-	uint16_t sel_melodie;
-	Heure alarme;
-	bool stop_alamre;
-	bool snooze_alarme;
-	bool activer_alarme;
-	bool activer_crepuscule;
-	bool activer_retroeclairage;
-	uint16_t seuil_luminosite;
-	uint16_t seuil_temperature;
-	uint16_t seuil_qa;
-} Consignes;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -107,9 +89,6 @@ void StartDefaultTask(void const * argument);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
-Consignes consignes;
-Heure heure = {0,0,0};
 /* USER CODE END 0 */
 
 /**
@@ -178,6 +157,7 @@ int main(void)
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
+  App_Init();
   /* USER CODE END RTOS_THREADS */
 
   /* Start scheduler */
