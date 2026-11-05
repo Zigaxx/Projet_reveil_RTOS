@@ -682,36 +682,45 @@ uint16_t Lire_Luminosite(){
 }
 
 
-HAL_StatusTypeDef TC72_Transfer(uint8_t *tx, uint8_t *rx, uint16_t n){
-	HAL_GPIO_WritePin(CE_GPIO_Port, CE_Pin, GPIO_PIN_SET);      // CE actif à l'état haut
+HAL_StatusTypeDef TC72_Transfer(uint8_t *tx, uint8_t *rx, uint16_t n)
+{
+	HAL_GPIO_WritePin(CSN_GPIO_Port, CSN_Pin, GPIO_PIN_SET);   // CSN toujours haut
+	HAL_GPIO_WritePin(CE_GPIO_Port, CE_Pin, GPIO_PIN_SET);     // CE actif à l'état haut
+	vTaskDelay(pdMS_TO_TICKS(1));
 	HAL_StatusTypeDef st = HAL_SPI_TransmitReceive(&hspi2, tx, rx, n, 10);
 	HAL_GPIO_WritePin(CE_GPIO_Port, CE_Pin, GPIO_PIN_RESET);
 	return st;
 }
 
-void TC72_Init(){
-	uint8_t tx[2] = {0x80, 0x04};      // écriture du registre de contrôle : conversion continue
-	uint8_t rx[2] = {0};
-	TC72_Transfer(tx, rx, 2);
-	vTaskDelay(pdMS_TO_TICKS(200));    // première conversion ≈ 150 ms
+void TC72_Init()
+{
+	uint8_t rx[4] = {0};
 
-	// Test de câblage : l'ID du fabricant vaut 0x54
-	uint8_t id_tx[2] = {0x03, 0x00};
-	TC72_Transfer(id_tx, rx, 2);
+	uint8_t w[2] = {0x80, 0x04};            // écriture du contrôle : conversion continue
+	TC72_Transfer(w, rx, 2);
+	vTaskDelay(pdMS_TO_TICKS(200));         // première conversion ≈ 150 ms
+
+	uint8_t c[2] = {0x00, 0x00};            // relecture du contrôle : doit afficher 04
+	TC72_Transfer(c, rx, 2);
+	printf("TC72 controle = 0x%02X (attendu 0x04)\r\n", rx[1]);
+
+	uint8_t i[2] = {0x03, 0x00};            // ID fabricant
+	TC72_Transfer(i, rx, 2);
 	printf("TC72 ID = 0x%02X (attendu 0x54)\r\n", rx[1]);
 }
 
+
 float Lire_Temperature(){
-	static float derniere = 0.0f;       // conservée si la lecture échoue
-	uint8_t tx[4] = {0x02, 0, 0, 0};    // adresse MSB, puis 3 octets d'horloge
+	static float derniere = 0.0f;
+	uint8_t tx[4] = {0x02, 0, 0, 0};        // lecture séquentielle : MSB, LSB, contrôle
 	uint8_t rx[4] = {0};
 
 	if(TC72_Transfer(tx, rx, 4) != HAL_OK){
 		return derniere;
 	}
 
-	int8_t  msb = (int8_t)rx[1];        // partie entière signée
-	uint8_t lsb = rx[2];                // bit 7 = 0,5 °C, bit 6 = 0,25 °C
+	int8_t  msb = (int8_t)rx[1];
+	uint8_t lsb = rx[2];
 
 	float t = (float)msb;
 	if(lsb & 0x80) t += 0.5f;
@@ -940,12 +949,12 @@ int main(void)
 	ActionsHandle = xQueueCreate(4, sizeof( Actions) );
 	/* USER CODE END RTOS_QUEUES */
 
-	/* USER CODE BEGIN RTOS_THREADS */
 	/* Create the thread(s) */
 	/* definition and creation of defaultTask */
 	osThreadDef(defaultTask, StartDefaultTask, osPriorityNormal, 0, 128);
 	defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
 
+	/* USER CODE BEGIN RTOS_THREADS */
 	xTaskCreate(task_gestion_horloge,       /* Function that implements the task. */
 			"TASK_GESTION_HORLOGE",          /* Text name for the task. */
 			256,      /* Stack size in words, not bytes. */
@@ -1007,7 +1016,7 @@ int main(void)
 			tskIDLE_PRIORITY+2,/* Priority at which the task is created. */
 			NULL );      /* Used to pass out the created task's handle. */
 	xTaskCreate(task_acq_temp_qa,       /* Function that implements the task. */
-			"luminosite",          /* Text name for the task. */
+			"temperature/QA",          /* Text name for the task. */
 			512,      /* Stack size in words, not bytes. */
 			NULL,    /* Parameter passed into the task. */
 			tskIDLE_PRIORITY+2,/* Priority at which the task is created. */
@@ -1321,17 +1330,17 @@ static void MX_SPI2_Init(void)
 	hspi2.Instance = SPI2;
 	hspi2.Init.Mode = SPI_MODE_MASTER;
 	hspi2.Init.Direction = SPI_DIRECTION_2LINES;
-	hspi2.Init.DataSize = SPI_DATASIZE_4BIT;
+	hspi2.Init.DataSize = SPI_DATASIZE_8BIT;
 	hspi2.Init.CLKPolarity = SPI_POLARITY_LOW;
-	hspi2.Init.CLKPhase = SPI_PHASE_1EDGE;
+	hspi2.Init.CLKPhase = SPI_PHASE_2EDGE;
 	hspi2.Init.NSS = SPI_NSS_SOFT;
-	hspi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
+	hspi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_64;
 	hspi2.Init.FirstBit = SPI_FIRSTBIT_MSB;
 	hspi2.Init.TIMode = SPI_TIMODE_DISABLE;
 	hspi2.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
 	hspi2.Init.CRCPolynomial = 7;
 	hspi2.Init.CRCLength = SPI_CRC_LENGTH_DATASIZE;
-	hspi2.Init.NSSPMode = SPI_NSS_PULSE_ENABLE;
+	hspi2.Init.NSSPMode = SPI_NSS_PULSE_DISABLE;
 	if (HAL_SPI_Init(&hspi2) != HAL_OK)
 	{
 		Error_Handler();
@@ -1618,10 +1627,10 @@ static void MX_GPIO_Init(void)
 	HAL_GPIO_WritePin(GPIOH, SHUT1_Pin|SHUT2_Pin, GPIO_PIN_RESET);
 
 	/*Configure GPIO pin Output Level */
-	HAL_GPIO_WritePin(DIR_GPIO_Port, DIR_Pin, GPIO_PIN_SET);
+	HAL_GPIO_WritePin(DIR_GPIO_Port, DIR_Pin, GPIO_PIN_RESET);
 
 	/*Configure GPIO pin Output Level */
-	HAL_GPIO_WritePin(GPIOB, DIS_Pin|CE_Pin, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(GPIOB, DIS_Pin|CE_Pin|CSN_Pin, GPIO_PIN_RESET);
 
 	/*Configure GPIO pin : B1_Pin */
 	GPIO_InitStruct.Pin = B1_Pin;
@@ -1661,8 +1670,8 @@ static void MX_GPIO_Init(void)
 	GPIO_InitStruct.Pull = GPIO_NOPULL;
 	HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-	/*Configure GPIO pins : DIS_Pin CE_Pin */
-	GPIO_InitStruct.Pin = DIS_Pin|CE_Pin;
+	/*Configure GPIO pins : DIS_Pin CE_Pin CSN_Pin */
+	GPIO_InitStruct.Pin = DIS_Pin|CE_Pin|CSN_Pin;
 	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
 	GPIO_InitStruct.Pull = GPIO_NOPULL;
 	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -2203,12 +2212,12 @@ void task_acq_luminosite(void *pvParameters){
 	}
 }
 
-void task_acq_temp_qa(void *pvParameters){
+void task_acq_temp_qa(void *pvParameters)
+{
 	TickType_t  dernier = xTaskGetTickCount();
 	TC72_Init();
 
-	while(1)
-	{
+	while(1){
 		float temp = Lire_Temperature();
 		uint16_t qa = Lire_QA();
 
@@ -2305,8 +2314,6 @@ void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim){
 		portYIELD_FROM_ISR(woken);
 	}
 }
-
-
 
 
 /* USER CODE END 4 */
