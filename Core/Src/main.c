@@ -137,6 +137,11 @@ typedef struct
 
 //Ventilateur
 #define PERIODE_VENT_MS 5000
+#define PERIODE_BALAYAGE_MS 500
+#define BALAYAGE_BORNE 2700 // en pas d'encodeur, à calibrer
+#define BALAYAGE_PAS 200
+#define BALAYAGE_MAX 5000000 // sécurité si l'encodeur ne répond pas
+
 // LED Adressables
 #define NB_LEDS 4
 #define LED_BITS (NB_LEDS*24)
@@ -144,10 +149,7 @@ typedef struct
 #define LED_T0 32 //0,4 us
 #define LED_T1 64 //0,8 us
 
-// Balayage
-#define BALAYAGE_BORNE 500        // en pas d'encodeur, à calibrer
-#define BALAYAGE_PAS 50
-#define BALAYAGE_MAX 5000       // sécurité si l'encodeur ne répond pas
+
 
 
 #define PERIODE_HORLOGE  1000
@@ -170,9 +172,6 @@ typedef struct
 #define LED_T0              32
 #define LED_T1              64
 
-#define BALAYAGE_BORNE      500
-#define BALAYAGE_PAS        50
-#define BALAYAGE_MAX        5000
 
 #define TC72_REG_CONTROL      0x00
 #define TC72_REG_TEMP_MSB     0x01
@@ -268,12 +267,17 @@ bool SplitCommandBluetooth(char * cmd, int *seuil, Heure *horaire, CommandeBluet
 
 void TofTask(void *argument);
 void GestionCommandTask (void *pvParameters);
-
 void task_gestion_aff_crep_aube(void *pvParameters);
-void aff_led(uint8_t niveau);
-
 void task_interface_actions(void *pvParameters);
 void task_interface_aff(void *pvParameters);
+void task_gestion_horloge(void *pvParameters);
+void task_gestion_alarme(void *pvParameters);
+void task_gestion_ventilateur(void * pvParameters);
+void task_acq_luminosite(void * pvParameters);
+void task_acq_temp_qa(void * pvParameters);
+
+
+void aff_led(uint8_t niveau);
 
 uint16_t ADC_Lire(uint8_t canal);
 // Buzzer
@@ -289,11 +293,11 @@ void Vent_Arret();
 void Heure_Incrementer(Heure *h);
 bool Heure_Egales(Heure a, Heure b);
 void Aff_ecran(Heure h, uint16_t sel, uint16_t valeur, bool retro);
-void task_gestion_horloge(void *pvParameters);
+
 
 void Act_alarme(bool on); // Activer la melodie de l'alarme
 Heure Set_alarme(Heure base,int delta); // Reglage de l'alarme (le snooze y compris)
-void task_gestion_alarme(void *pvParameters);
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -641,24 +645,16 @@ void Ecran_Afficher(const Affichages *a){
 		break;
 	}
 
-	if (a->ecran_retro)
-	{
-		ssd1306_Fill(White);  // Fond blanc
-		// Écrire le texte en noir
-	}
-	else
-	{
-		ssd1306_Fill(Black);  // Fond noir
-		// Écrire le texte en blanc
-	}
+	SSD1306_COLOR fond  = a->ecran_retro ? White : Black;
+	SSD1306_COLOR texte = a->ecran_retro ? Black : White;
+
+	ssd1306_Fill(fond);
 	ssd1306_SetCursor(0, 0);
-	ssd1306_WriteString(l1, Font_11x18, White);
+	ssd1306_WriteString(l1, Font_11x18, texte);
 	ssd1306_SetCursor(0, 30);
-	ssd1306_WriteString(l2, Font_11x18, White);
+	ssd1306_WriteString(l2, Font_11x18, texte);
 	xSemaphoreTake(mtx_i2cHandle, portMAX_DELAY);
 	ssd1306_UpdateScreen();
-
-
 	xSemaphoreGive(mtx_i2cHandle);
 }
 
@@ -772,7 +768,7 @@ uint16_t Lire_QA(){
 void Vent_Marche(){
 	uint16_t pot = ADC_Lire(1);
 	//__HAL_TIM_SET_COMPARE(&htim2,TIM_CHANNEL_1,(uint32_t)pot * 3999 / 4095);
-	__HAL_TIM_SET_COMPARE(&htim2,TIM_CHANNEL_1,3999);
+	__HAL_TIM_SET_COMPARE(&htim2,TIM_CHANNEL_1,2999);
 	HAL_GPIO_WritePin(DIS_GPIO_Port, DIS_Pin, GPIO_PIN_RESET); // activation du moteur
 }
 
@@ -944,27 +940,28 @@ int main(void)
 	ActionsHandle = xQueueCreate(4, sizeof( Actions) );
 	/* USER CODE END RTOS_QUEUES */
 
-
 	/* USER CODE BEGIN RTOS_THREADS */
+	/* Create the thread(s) */
+	/* definition and creation of defaultTask */
 	osThreadDef(defaultTask, StartDefaultTask, osPriorityNormal, 0, 128);
 	defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
 
 	xTaskCreate(task_gestion_horloge,       /* Function that implements the task. */
 			"TASK_GESTION_HORLOGE",          /* Text name for the task. */
-			1024,      /* Stack size in words, not bytes. */
+			256,      /* Stack size in words, not bytes. */
 			NULL,    /* Parameter passed into the task. */
 			tskIDLE_PRIORITY+11,/* Priority at which the task is created. */
 			&xTaskGestionHorloge );      /* Used to pass out the created task's handle. */
 	xTaskCreate(task_interface_actions,       /* Function that implements the task. */
 			"TASK_INTERFACE_ACTIONS",          /* Text name for the task. */
-			1024,      /* Stack size in words, not bytes. */
+			256,      /* Stack size in words, not bytes. */
 			NULL,    /* Parameter passed into the task. */
 			tskIDLE_PRIORITY+6,/* Priority at which the task is created. */
 			&xTaskInterfaceActions  );      /* Used to pass out the created task's handle. */
 
 	xTaskCreate(task_interface_aff,       /* Function that implements the task. */
 			"TASK_INTERFACE_AFF",          /* Text name for the task. */
-			1024,      /* Stack size in words, not bytes. */
+			512,      /* Stack size in words, not bytes. */
 			NULL,    /* Parameter passed into the task. */
 			tskIDLE_PRIORITY+7,/* Priority at which the task is created. */
 			&xTaskInterfaceAff  );      /* Used to pass out the created task's handle. */
@@ -972,7 +969,7 @@ int main(void)
 	/* USER CODE BEGIN RTOS_THREADS */
 	xTaskCreate(task_gestion_aff_crep_aube,       /* Function that implements the task. */
 			"TASK_GESTION_AFF_CREP_AUBE",          /* Text name for the task. */
-			1024,      /* Stack size in words, not bytes. */
+			256,      /* Stack size in words, not bytes. */
 			NULL,    /* Parameter passed into the task. */
 			tskIDLE_PRIORITY+8,/* Priority at which the task is created. */
 			NULL );      /* Used to pass out the created task's handle. */
@@ -980,38 +977,38 @@ int main(void)
 	/* add threads, ... */
 	xTaskCreate(TofTask,       /* Function that implements the task. */
 			"TofTask",          /* Text name for the task. */
-			1024,      /* Stack size in words, not bytes. */
+			512,      /* Stack size in words, not bytes. */
 			NULL,    /* Parameter passed into the task. */
 			tskIDLE_PRIORITY+10,/* Priority at which the task is created. */
 			NULL );      /* Used to pass out the created task's handle. */
 
 	xTaskCreate(GestionCommandTask,       /* Function that implements the task. */
 			"Commandes",          /* Text name for the task. */
-			1024,      /* Stack size in words, not bytes. */
+			256,      /* Stack size in words, not bytes. */
 			NULL,    /* Parameter passed into the task. */
 			tskIDLE_PRIORITY+9,/* Priority at which the task is created. */
 			NULL );      /* Used to pass out the created task's handle. */
 	xTaskCreate(task_gestion_alarme,       /* Function that implements the task. */
 			"alarmes",          /* Text name for the task. */
-			1024,      /* Stack size in words, not bytes. */
+			256,      /* Stack size in words, not bytes. */
 			NULL,    /* Parameter passed into the task. */
 			tskIDLE_PRIORITY+4,/* Priority at which the task is created. */
 			NULL );      /* Used to pass out the created task's handle. */
 	xTaskCreate(task_gestion_ventilateur,       /* Function that implements the task. */
 			"ventilateur",          /* Text name for the task. */
-			1024,      /* Stack size in words, not bytes. */
+			256,      /* Stack size in words, not bytes. */
 			NULL,    /* Parameter passed into the task. */
 			tskIDLE_PRIORITY+2,/* Priority at which the task is created. */
 			NULL );      /* Used to pass out the created task's handle. */
 	xTaskCreate(task_acq_luminosite,       /* Function that implements the task. */
 			"luminosite",          /* Text name for the task. */
-			1024,      /* Stack size in words, not bytes. */
+			256,      /* Stack size in words, not bytes. */
 			NULL,    /* Parameter passed into the task. */
 			tskIDLE_PRIORITY+2,/* Priority at which the task is created. */
 			NULL );      /* Used to pass out the created task's handle. */
 	xTaskCreate(task_acq_temp_qa,       /* Function that implements the task. */
 			"luminosite",          /* Text name for the task. */
-			1024,      /* Stack size in words, not bytes. */
+			512,      /* Stack size in words, not bytes. */
 			NULL,    /* Parameter passed into the task. */
 			tskIDLE_PRIORITY+2,/* Priority at which the task is created. */
 			NULL );      /* Used to pass out the created task's handle. */
@@ -1621,7 +1618,7 @@ static void MX_GPIO_Init(void)
 	HAL_GPIO_WritePin(GPIOH, SHUT1_Pin|SHUT2_Pin, GPIO_PIN_RESET);
 
 	/*Configure GPIO pin Output Level */
-	HAL_GPIO_WritePin(DIR_GPIO_Port, DIR_Pin, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(DIR_GPIO_Port, DIR_Pin, GPIO_PIN_SET);
 
 	/*Configure GPIO pin Output Level */
 	HAL_GPIO_WritePin(GPIOB, DIS_Pin|CE_Pin, GPIO_PIN_RESET);
@@ -1708,7 +1705,7 @@ void task_gestion_horloge(void *pvParameters){
 
 		// Retroeclairage
 		if(mesure_ok){
-			consignes.activer_retroeclairage = (infos.luminosite < consignes.seuil_luminosite);
+			consignes.activer_retroeclairage = (infos.luminosite > consignes.seuil_luminosite);
 		}
 		bool retro = consignes.activer_retroeclairage;
 		uint8_t sel = consignes.sel_affichage;
@@ -2061,6 +2058,8 @@ void task_interface_actions(void *pvParameters){
 	uint8_t mel, idx;
 	int8_t sens = 1;
 	TickType_t t_note, t_bal, t_inversion;
+	uint32_t ref = 0; //reference pour le calcul du balayage
+
 	while(1){
 		// Attente prochaine action
 		TickType_t now = xTaskGetTickCount();
@@ -2083,7 +2082,7 @@ void task_interface_actions(void *pvParameters){
 					Vent_Marche();
 					balaye = action.act_balayage;
 					if(balaye){
-						__HAL_TIM_SET_COUNTER(&htim5,0);
+						ref = __HAL_TIM_SET_COUNTER(&htim5,0);
 						sens = 1;
 						HAL_GPIO_WritePin(DIR_GPIO_Port, DIR_Pin, GPIO_PIN_RESET);
 						t_bal = t_inversion = xTaskGetTickCount();
@@ -2119,26 +2118,31 @@ void task_interface_actions(void *pvParameters){
 		// Action
 		now = xTaskGetTickCount();
 
-		if(sonne && (int32_t)(now - t_note) >= 0){
+		if(sonne && (int32_t)(now - t_note) >= 0)
+		{
 			const Note* n= &melodies[mel].notes[idx];
 			Buzzer_Note(n->feq);
 			t_note = now + pdMS_TO_TICKS(n->duree);
 			idx = (idx +1) % melodies[mel].nb;
 		}
 
-		if(balaye && (int32_t)(now - t_note) >= 0){
-			int pos = (int32_t)__HAL_TIM_GET_COUNTER(&htim5);
-			bool inverser = (sens > 0 && pos >= BALAYAGE_BORNE) ||
-					(sens < 0 && pos <= BALAYAGE_BORNE) ||
-					((now - t_inversion) > pdMS_TO_TICKS(BALAYAGE_MAX));
+		if (balaye && (int32_t)(now - t_bal) >= 0)
+		{
+			uint32_t cnt   = __HAL_TIM_GET_COUNTER(&htim5);
+			int32_t  delta = (int32_t)(cnt - ref);   // la soustraction non signée gère le wrap
+			if (delta < 0)
+				delta = -delta;
 
-			if(inverser){
+			bool inverser = (delta >= BALAYAGE_BORNE) || ((now - t_inversion) > pdMS_TO_TICKS(BALAYAGE_MAX));
+
+			if (inverser)
+			{
 				sens = -sens;
 				HAL_GPIO_WritePin(DIR_GPIO_Port, DIR_Pin, (sens > 0) ? GPIO_PIN_RESET : GPIO_PIN_SET);
+				ref = cnt;                // nouvelle référence pour le sens suivant
 				t_inversion = now;
 			}
-			Vent_Marche();
-			t_bal = now + pdMS_TO_TICKS(PERIODE_VENT_MS);
+			t_bal = now + pdMS_TO_TICKS(PERIODE_BALAYAGE_MS);
 		}
 
 	}
