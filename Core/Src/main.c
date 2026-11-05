@@ -107,6 +107,15 @@ typedef struct
 	uint8_t nb;
 }Melodie;
 
+typedef struct
+{
+	uint16_t temperature;
+	uint16_t luminosite;
+	uint16_t qualite_air;
+	uint16_t qualite_sommeil;
+}Infos;
+
+
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -141,6 +150,8 @@ typedef struct
 #define BALAYAGE_MAX 5000       // sécurité si l'encodeur ne répond pas
 
 
+#define PERIODE_HORLOGE  1000
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -169,13 +180,12 @@ DMA_HandleTypeDef hdma_tim3_ch4_up;
 osThreadId defaultTaskHandle;
 /* USER CODE BEGIN PV */
 
+
 //semaphores
 
-SemaphoreHandle_t ConsignesMutexSemaphHandle;
+SemaphoreHandle_t mtx_consignesHandle;
 SemaphoreHandle_t HeureMutexSemaphHandle;
 SemaphoreHandle_t AlarmeMutexSemaphHandle;
-
-SemaphoreHandle_t mtx_consignesHandle;
 
 // mailbbox
 
@@ -201,15 +211,24 @@ uint16_t led_buffer[LED_BITS + LED_RESET_SLOTS];
 xTaskHandle xTaskGestionAffCrepAube;
 xTaskHandle xTaskInterfaceActions;
 xTaskHandle xTaskInterfaceAff;
-
+xTaskHandle xTaskGestionHorloge;
 
 // DECLARATION SEMAPHORES
 xSemaphoreHandle sem_ledHandle; // fin de trame DMA
 xSemaphoreHandle mtx_adcHandle;
 xSemaphoreHandle mtx_consignesHandle;
 xSemaphoreHandle mtx_i2cHandle;
+xSemaphoreHandle mtx_consignesHandle;
+xSemaphoreHandle sem_alarmeHandle;
+xSemaphoreHandle mtx_heureHandle;
+
 // MAILBOXES
 xQueueHandle AffHandle;
+xQueueHandle InfosHandle;
+xQueueHandle AffHandle;
+
+// FONCTIONS
+
 
 /* USER CODE END PV */
 
@@ -255,6 +274,11 @@ void Ecran_Afficher(const Affichages *a);
 // Ventilateur
 void Vent_Marche();
 void Vent_Arret();
+
+void Heure_Incrementer(Heure *h);
+bool Heure_Egales(Heure a, Heure b);
+void Aff_ecran(Heure h, uint16_t sel, uint16_t valeur, bool retro);
+void task_gestion_horloge(void *pvParameters);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -263,6 +287,7 @@ void Vent_Arret();
 //----------------------------------------------------------------------------------
 //-------------Declaration de Variables globales
 //----------------------------------------------------------------------------------
+
 Consignes consignes;
 Heure heure = {0,0,0};
 Heure alarme = {0,0,0};
@@ -589,8 +614,8 @@ void Ecran_Afficher(const Affichages *a){
 	ssd1306_WriteString(l1, Font_11x18, White);
 	ssd1306_SetCursor(0, 30);
 	ssd1306_WriteString(l2, Font_11x18, White);
-	ssd1306_SetContrast(a->ecran_retro ? 0xFF : 0x40);
 	xSemaphoreTake(mtx_i2cHandle, portMAX_DELAY);
+	ssd1306_SetContrast(a->ecran_retro ? 0xFF : 0x40);
 	ssd1306_UpdateScreen();
 	xSemaphoreGive(mtx_i2cHandle);
 }
@@ -667,17 +692,20 @@ int main(void)
 	/* add mutexes, ... */
 	/* USER CODE END RTOS_MUTEX */
 
+
 	/* USER CODE BEGIN RTOS_SEMAPHORES */
 	/* add semaphores, ... */
 	mtx_consignesHandle = xSemaphoreCreateMutex();
 	sem_ledHandle = xSemaphoreCreateBinary();
 	mtx_adcHandle = xSemaphoreCreateMutex();
 	mtx_i2cHandle = xSemaphoreCreateMutex();
-
-	ConsignesMutexSemaphHandle = xSemaphoreCreateMutex();
+	sem_alarmeHandle = xSemaphoreCreateBinary();
+	mtx_consignesHandle = xSemaphoreCreateMutex();
+	mtx_heureHandle = xSemaphoreCreateMutex();
 	HeureMutexSemaphHandle = xSemaphoreCreateMutex();
 	AlarmeMutexSemaphHandle = xSemaphoreCreateMutex();
 	/* USER CODE END RTOS_SEMAPHORES */
+
 
 	/* USER CODE BEGIN RTOS_TIMERS */
 	/* start timers, add new ones, ... */
@@ -685,20 +713,29 @@ int main(void)
 
 	/* USER CODE BEGIN RTOS_QUEUES */
 	/* add queues, ... */
+	InfosHandle = xQueueCreate(1, sizeof(Infos) );
 	xQueueCommandes = xQueueCreate(10, sizeof(Commande));
 	AffHandle = xQueueCreate(4, sizeof(Affichages) );
+	/* USER CODE END RTOS_QUEUES */
+
 
 	/* USER CODE BEGIN RTOS_THREADS */
-
 	osThreadDef(defaultTask, StartDefaultTask, osPriorityNormal, 0, 128);
 	defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
 
-	xTaskCreate(task_interface_actions,       /* Function that implements the task. */
-			"TASK_INTERFACE_ACTIONS",          /* Text name for the task. */
+	xTaskCreate(task_gestion_horloge,       /* Function that implements the task. */
+			"TASK_GESTION_HORLOGE",          /* Text name for the task. */
 			1024,      /* Stack size in words, not bytes. */
 			NULL,    /* Parameter passed into the task. */
-			tskIDLE_PRIORITY+6,/* Priority at which the task is created. */
-			&xTaskInterfaceActions  );      /* Used to pass out the created task's handle. */
+			tskIDLE_PRIORITY+11,/* Priority at which the task is created. */
+			&xTaskGestionHorloge );      /* Used to pass out the created task's handle. */
+
+	//	xTaskCreate(task_interface_actions,       /* Function that implements the task. */
+	//			"TASK_INTERFACE_ACTIONS",          /* Text name for the task. */
+	//			1024,      /* Stack size in words, not bytes. */
+	//			NULL,    /* Parameter passed into the task. */
+	//			tskIDLE_PRIORITY+6,/* Priority at which the task is created. */
+	//			&xTaskInterfaceActions  );      /* Used to pass out the created task's handle. */
 
 	xTaskCreate(task_interface_aff,       /* Function that implements the task. */
 			"TASK_INTERFACE_AFF",          /* Text name for the task. */
@@ -716,14 +753,14 @@ int main(void)
 			NULL );      /* Used to pass out the created task's handle. */
 
 	/* add threads, ... */
-	xTaskCreate(      TofTask,       /* Function that implements the task. */
+	xTaskCreate(TofTask,       /* Function that implements the task. */
 			"TofTask",          /* Text name for the task. */
 			1024,      /* Stack size in words, not bytes. */
 			NULL,    /* Parameter passed into the task. */
 			tskIDLE_PRIORITY+5,/* Priority at which the task is created. */
 			NULL );      /* Used to pass out the created task's handle. */
 
-	xTaskCreate(      GestionCommandTask,       /* Function that implements the task. */
+	xTaskCreate(GestionCommandTask,       /* Function that implements the task. */
 			"Commandes",          /* Text name for the task. */
 			1024,      /* Stack size in words, not bytes. */
 			NULL,    /* Parameter passed into the task. */
@@ -1409,6 +1446,83 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+void Heure_Incrementer(Heure *h){
+	h->sec++;
+	if(h->sec >= 60){
+		h->sec = 0;
+		h->min++;
+	}
+	if(h->min >= 60){
+		h->min = 0;
+		h->h++;
+	}
+	if(h->h >= 24){
+		h->h++;
+	}
+}
+
+bool Heure_Egales(Heure a, Heure b){
+	if( (a.h == b.h) && (a.min == b.min) && (a.sec == b.sec)){
+		return true;
+	}
+	return false;
+}
+
+void Aff_ecran(Heure h, uint16_t sel, uint16_t valeur, bool retro){
+	Affichages aff;
+	aff.ecran_heure = h;
+	aff.ecran_sel = sel;
+	aff.ecran_valide = true;
+	aff.ecran_retro = retro;
+	aff.ecran_valeur = valeur;
+	xQueueSend(AffHandle, &aff, pdMS_TO_TICKS(10));   // si pleine, la MAJ de la seconde suivante rattrapera
+}
+
+void task_gestion_horloge(void *pvParameters){
+	TickType_t dernier = xTaskGetTickCount();
+	Infos infos;
+
+	while(1){
+		vTaskDelayUntil(&dernier, pdMS_TO_TICKS(PERIODE_HORLOGE));
+
+		// Incrementation heure
+		Heure h;
+		xSemaphoreTake(mtx_heureHandle, portMAX_DELAY);
+		Heure_Incrementer(&heure);
+		h = heure; // Copie locale pour la comparaison avec l'alarme
+		xSemaphoreGive(mtx_heureHandle);
+
+		bool mesure_ok = (xQueuePeek(InfosHandle, &infos, 0) == pdPASS); // dernières mesures (Peek, comme pour le ventilateur)
+
+		// Alarme
+		xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
+		bool declencher = Heure_Egales(h, alarme) && !consignes.activer_alarme;
+		if(declencher){
+			consignes.activer_alarme = true; // Pour la gestion de l'aube
+		}
+
+		// Retroeclairage
+		if(mesure_ok){
+			consignes.activer_retroeclairage = (infos.luminosite < consignes.seuil_luminosite);
+		}
+		bool retro = consignes.activer_retroeclairage;
+		uint8_t sel = consignes.sel_affichage;
+		xSemaphoreGive(mtx_consignesHandle);
+
+		if(declencher){
+			xSemaphoreGive(sem_alarmeHandle); // reveil de la task de gestion d'alarme
+		}
+		// Selection affichage
+		uint8_t valeur =0;
+		switch(sel){
+		case 1: valeur = infos.temperature;
+		case 2: valeur = infos.qualite_air;
+		case 3: valeur = infos.qualite_sommeil;
+		}
+		// Actualisation ecran
+		Aff_ecran(h, sel, valeur, retro);
+	}
+}
 
 
 //----------------------------------------------------------------------------------
@@ -1492,19 +1606,19 @@ void GestionCommandTask (void *pvParameters)
 				xSemaphoreGive(AlarmeMutexSemaphHandle);
 				break;
 			case CMD_SEUIL_LUMI:
-				xSemaphoreTake(ConsignesMutexSemaphHandle, portMAX_DELAY);
+				xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
 				consignes.seuil_luminosite = seuil;
-				xSemaphoreGive(ConsignesMutexSemaphHandle);
+				xSemaphoreGive(mtx_consignesHandle);
 				break;
 			case CMD_SEUIL_QA:
-				xSemaphoreTake(ConsignesMutexSemaphHandle, portMAX_DELAY);
+				xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
 				consignes.seuil_qa = seuil;
-				xSemaphoreGive(ConsignesMutexSemaphHandle);
+				xSemaphoreGive(mtx_consignesHandle);
 				break;
 			case CMD_SEUIL_TEMP:
-				xSemaphoreTake(ConsignesMutexSemaphHandle, portMAX_DELAY);
+				xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
 				consignes.seuil_temperature = seuil;
-				xSemaphoreGive(ConsignesMutexSemaphHandle);
+				xSemaphoreGive(mtx_consignesHandle);
 				break;
 			default:
 				break;
@@ -1514,49 +1628,50 @@ void GestionCommandTask (void *pvParameters)
 			case CMD_SET_AFFICHAGE:
 				if(consignes.sel_affichage >= MAX_SEL_AFFICHAGE)
 				{
-					xSemaphoreTake(ConsignesMutexSemaphHandle, portMAX_DELAY);
+					xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
 					consignes.sel_affichage = 0;
-					xSemaphoreGive(ConsignesMutexSemaphHandle);
+					xSemaphoreGive(mtx_consignesHandle);
 				}
 				else
 				{
-					xSemaphoreTake(ConsignesMutexSemaphHandle, portMAX_DELAY);
+					xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
 					consignes.sel_affichage += 1;
-					xSemaphoreGive(ConsignesMutexSemaphHandle);
+					xSemaphoreGive(mtx_consignesHandle);
 				}
 				break;
 
 			case CMD_SET_MELODIE:
 				if(consignes.sel_melodie >= NB_MELODIES)
 				{
-					xSemaphoreTake(ConsignesMutexSemaphHandle, portMAX_DELAY);
+					xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
 					consignes.sel_melodie = 0;
-					xSemaphoreGive(ConsignesMutexSemaphHandle);
+					xSemaphoreGive(mtx_consignesHandle);
 				}
 				else
 				{
-					xSemaphoreTake(ConsignesMutexSemaphHandle, portMAX_DELAY);
+					xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
 					consignes.sel_melodie += 1;
-					xSemaphoreGive(ConsignesMutexSemaphHandle);
+					xSemaphoreGive(mtx_consignesHandle);
 				}
 				break;
 
 			case CMD_SET_CREPUSCULE:
-				xSemaphoreTake(ConsignesMutexSemaphHandle, portMAX_DELAY);
+				xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
 				consignes.activer_crepuscule = true;
-				xSemaphoreGive(ConsignesMutexSemaphHandle);
+				xSemaphoreGive(mtx_consignesHandle);
 				break;
 
 			case CMD_SNOOZE:
-				xSemaphoreTake(ConsignesMutexSemaphHandle, portMAX_DELAY);
+				xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
 				consignes.snooze_alarme = true;
-				xSemaphoreGive(ConsignesMutexSemaphHandle);
+				xSemaphoreGive(mtx_consignesHandle);
 				break;
 
 			case CMD_STOP_REVEIL:
-				xSemaphoreTake(ConsignesMutexSemaphHandle, portMAX_DELAY);
+				xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
 				consignes.stop_alarme = true;
-				xSemaphoreGive(ConsignesMutexSemaphHandle);
+				consignes.activer_alarme = false;
+				xSemaphoreGive(mtx_consignesHandle);
 				break;
 
 			default:
@@ -1577,7 +1692,9 @@ void TofTask(void *argument)
 	int lastFallIdx = -1;
 	bool locked = false; // vrai après un stop/snooze, jusqu'à ce que les 2 capteurs soient libres
 
+	xSemaphoreTake(mtx_i2cHandle, portMAX_DELAY);
 	TofInit();
+	xSemaphoreGive(mtx_i2cHandle);
 
 	for (;;)
 	{
@@ -1585,7 +1702,9 @@ void TofTask(void *argument)
 
 		for (int i = 0; i < 2; i++)
 		{
+			xSemaphoreTake(mtx_i2cHandle, portMAX_DELAY);
 			TofUpdate(i);
+			xSemaphoreGive(mtx_i2cHandle);
 			bool cur = tofPresent[i];
 
 			if (cur && !prev[i]) // main arrive sur i
@@ -1618,6 +1737,125 @@ void TofTask(void *argument)
 			locked = false;
 
 		vTaskDelay(pdMS_TO_TICKS(TOF_PERIOD_MS));
+	}
+}
+
+//----------------------------------------------------------------------------------
+//-------------Tache pour la gestion du buzzer et du ventilateur
+//----------------------------------------------------------------------------------
+/*
+void task_interface_actions(void *pvParameters)
+{
+	Actions action;
+	bool sonne = false, balaye = false;
+	uint8_t mel, idx;
+	uint8_t sens = 1;
+	TickType_t t_note, t_bal, t_inversion;
+
+	while(1){
+		// Attente prochaine action
+		TickType_t now = xTaskGetTickCount();
+		TickType_t wait = portMAX_DELAY;
+
+		if(sonne){
+			wait = Delai(t_note,now);
+		}
+
+		if(balaye){
+			TickType_t d = Delai(t_bal,now);
+			if(d < wait){
+				wait = d;
+			}
+		}
+		// Reception ordre
+
+		if(action.ventilo_valide){
+			if (action.act_rafraichissement || action.act_balayage){
+				Vent_Marche();
+				balaye = action.act_balayage;
+				if(balaye){
+					__HAL_TIM_SET_COUNTER(&htim5,0);
+					sens =1;
+					HAL_GPIO_WritePin(DIR_GPIO_Port, DIR_Pin, GPIO_PIN_RESET);
+					t_bal = t_inversion = xTaskGetTickCount();
+				}
+			}
+			else{
+				balaye = false;
+				Vent_Arret();
+			}
+		}
+
+		if(action.alarme_valide){
+			if(action.act_alarme && !sonne){
+				xSemaphoreTake(mtx_consignesHandle,portMAX_DELAY);
+				if(consignes.sel_melodie < NB_MELODIES){
+					mel = consignes.sel_melodie;
+				}
+				else{
+					mel = 0;
+				}
+				xSemaphoreGive(mtx_consignesHandle);
+				idx = 0;
+				sonne = true;
+				HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_4);
+				t_note = xTaskGetTickCount();
+			}
+			else if(!action.act_alarme){
+				sonne = false;
+				HAL_TIM_PWM_Stop(&htim8, TIM_CHANNEL_4);
+			}
+		}
+		// Action
+		now = xTaskGetTickCount();
+
+		if(sonne && (now - t_note) >= 0){
+			const Note* n= &melodies[mel].notes[idx];
+			Buzzer_Note(n->feq);
+			t_note = now + pdMS_TO_TICKS(n->duree);
+			idx = (idx +1) % melodies[mel].nb;
+		}
+
+		if(balaye && (now - t_note) >= 0){
+			int pos = __HAL_TIM_GET_COUNTER(&htim5);
+			bool inverser = (sens > 0 && pos >= BALAYAGE_BORNE) ||
+					(sens < 0 && pos <= BALAYAGE_BORNE) ||
+					((now - t_inversion) > pdMS_TO_TICKS(BALAYAGE_MAX));
+
+			if(inverser){
+				sens = -sens;
+				HAL_GPIO_WritePin(DIR_GPIO_Port, DIR_Pin, (sens > 0) ? GPIO_PIN_RESET : GPIO_PIN_SET);
+				t_inversion = now;
+			}
+			Vent_Marche();
+			t_bal = now + pdMS_TO_TICKS(PERIODE_VENT_MS);
+		}
+
+		vTaskDelay(pdMS_TO_TICKS(20));
+	}
+}
+ */
+
+//----------------------------------------------------------------------------------
+//-------------tache interface de l'écran Oled
+//----------------------------------------------------------------------------------
+
+void task_interface_aff(void *pvParameters){
+	Affichages aff;
+	xSemaphoreTake(mtx_i2cHandle, portMAX_DELAY);
+	ssd1306_Init();
+	xSemaphoreGive(mtx_i2cHandle);
+
+	while(1){
+		if(xQueueReceive(AffHandle, &aff, portMAX_DELAY) == pdPASS){
+			if(aff.led_valide){
+				Leds_Envoyer(aff.led_niveau);
+			}
+
+			if(aff.ecran_valide){
+				Ecran_Afficher(&aff);
+			}
+		}
 	}
 }
 
@@ -1693,113 +1931,6 @@ void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
 	}
 }
 
-
-
-// Taches
-void task_interface_actions(void *pvParameters)
-{
-	Actions action;
-	bool sonne = false, balaye = false;
-	uint8_t mel, idx;
-	uint8_t sens = 1;
-	TickType_t t_note, t_bal, t_inversion;
-	while(1){
-		// Attente prochaine action
-		TickType_t now = xTaskGetTickCount();
-		TickType_t wait = portMAX_DELAY;
-
-		if(sonne){
-			wait = Delai(t_note,now);
-		}
-
-		if(balaye){
-			TickType_t d = Delai(t_bal,now);
-			if(d < wait){
-				wait = d;
-			}
-		}
-		// Reception ordre
-		if(action.ventilo_valide){
-			if (action.act_rafraichissement || action.act_balayage){
-				Vent_Marche();
-				balaye = action.act_balayage;
-				if(balaye){
-					__HAL_TIM_SET_COUNTER(&htim5,0);
-					sens =1;
-					HAL_GPIO_WritePin(DIR_GPIO_Port, DIR_Pin, GPIO_PIN_RESET);
-					t_bal = t_inversion = xTaskGetTickCount();
-				}
-			}
-			else{
-				balaye = false;
-				Vent_Arret();
-			}
-		}
-
-		if(action.alarme_valide){
-			if(action.act_alarme && !sonne){
-				xSemaphoreTake(mtx_consignesHandle,portMAX_DELAY);
-				if(consignes.sel_melodie < NB_MELODIES){
-					mel = consignes.sel_melodie;
-				}
-				else{
-					mel = 0;
-				}
-				xSemaphoreGive(mtx_consignesHandle);
-				idx = 0;
-				sonne = true;
-				HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_4);
-				t_note = xTaskGetTickCount();
-			}
-			else if(!action.act_alarme){
-				sonne = false;
-				HAL_TIM_PWM_Stop(&htim8, TIM_CHANNEL_4);
-			}
-		}
-		// Action
-		now = xTaskGetTickCount();
-
-		if(sonne && (now - t_note) >= 0){
-			const Note* n= &melodies[mel].notes[idx];
-			Buzzer_Note(n->feq);
-			t_note = now + pdMS_TO_TICKS(n->duree);
-			idx = (idx +1) % melodies[mel].nb;
-		}
-
-		if(balaye && (now - t_note) >= 0){
-			int pos = __HAL_TIM_GET_COUNTER(&htim5);
-			bool inverser = (sens > 0 && pos >= BALAYAGE_BORNE) ||
-					(sens < 0 && pos <= BALAYAGE_BORNE) ||
-					((now - t_inversion) > pdMS_TO_TICKS(BALAYAGE_MAX));
-
-			if(inverser){
-				sens = -sens;
-				HAL_GPIO_WritePin(DIR_GPIO_Port, DIR_Pin, (sens > 0) ? GPIO_PIN_RESET : GPIO_PIN_SET);
-				t_inversion = now;
-			}
-			Vent_Marche();
-			t_bal = now + pdMS_TO_TICKS(PERIODE_VENT_MS);
-		}
-
-	}
-}
-
-void task_interface_aff(void *pvParameters){
-	Affichages aff;
-	ssd1306_Init();
-
-	while(1){
-		if(xQueueReceive(AffHandle, &aff, portMAX_DELAY) == pdPASS){
-			if(aff.led_valide){
-				Leds_Envoyer(aff.led_niveau);
-			}
-
-			if(aff.ecran_valide){
-				Ecran_Afficher(&aff);
-			}
-		}
-	}
-}
 
 
 /* USER CODE END 4 */
