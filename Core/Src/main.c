@@ -44,7 +44,6 @@ typedef struct
 	uint16_t vitesse_ventilo;
 	uint16_t sel_affichage;
 	uint16_t sel_melodie;
-	Heure alarme;
 	bool stop_alarme;
 	bool snooze_alarme;
 	bool activer_alarme;
@@ -116,6 +115,7 @@ TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
 TIM_HandleTypeDef htim5;
 TIM_HandleTypeDef htim8;
+DMA_HandleTypeDef hdma_tim3_ch4_up;
 
 osThreadId defaultTaskHandle;
 /* USER CODE BEGIN PV */
@@ -142,6 +142,7 @@ QueueHandle_t AffHandle;
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_ADC1_Init(void);
@@ -155,8 +156,6 @@ static void MX_TIM8_Init(void);
 void StartDefaultTask(void const * argument);
 
 /* USER CODE BEGIN PFP */
-
-
 
 bool CommandBlutoothTypeExtraction(char *cmd, uint8_t *index, char *commandType);
 bool ChooseBluetoothCommandType(char * cmd, CommandeBluetoothType *type);
@@ -371,6 +370,35 @@ static void TofUpdate(int i)
 }
 
 
+//----------------------------------------------------------------------------------
+//-------------Fonctions affichage aube/crepuscule
+//----------------------------------------------------------------------------------
+
+
+void aff_led(uint8_t niveau){
+	Affichages aff;
+	aff.led_valide = true;
+	aff.led_niveau = niveau;
+	xQueueSend(AffHandle, &aff, pdMS_TO_TICKS(100));
+}
+
+// Déclaration des fonctions
+
+static bool Alarme_active(){
+	xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
+	bool r = consignes.activer_alarme;
+	xSemaphoreGive(mtx_consignesHandle);
+	return r;
+}
+
+static bool Crep_active(){
+	xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
+	bool r = consignes.activer_crepuscule;
+	xSemaphoreGive(mtx_consignesHandle);
+	return r;
+}
+
+
 /* USER CODE END 0 */
 
 /**
@@ -402,6 +430,7 @@ int main(void)
 
 	/* Initialize all configured peripherals */
 	MX_GPIO_Init();
+	MX_DMA_Init();
 	MX_USART2_UART_Init();
 	MX_I2C1_Init();
 	MX_ADC1_Init();
@@ -414,10 +443,12 @@ int main(void)
 	MX_TIM8_Init();
 	/* USER CODE BEGIN 2 */
 
-
+	HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
+	HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);                    // ventilateur (PA5)
+	HAL_TIM_Encoder_Start(&htim5, TIM_CHANNEL_ALL);              // encodeur
+	HAL_GPIO_WritePin(DIS_GPIO_Port, DIS_Pin, GPIO_PIN_SET);     // moteur désactivé au départ
 	HAL_UART_Receive_IT(&hlpuart1, (uint8_t *) &bluetoothChar, 1);
 	/* USER CODE END 2 */
-
 
 	/* USER CODE BEGIN RTOS_MUTEX */
 	/* add mutexes, ... */
@@ -432,7 +463,6 @@ int main(void)
 	AlarmeMutexSemaphHandle = xSemaphoreCreateMutex();
 	/* USER CODE END RTOS_SEMAPHORES */
 
-
 	/* USER CODE BEGIN RTOS_TIMERS */
 	/* start timers, add new ones, ... */
 	/* USER CODE END RTOS_TIMERS */
@@ -445,11 +475,11 @@ int main(void)
 
 	/* USER CODE END RTOS_QUEUES */
 
-
 	/* Create the thread(s) */
 	/* definition and creation of defaultTask */
 	osThreadDef(defaultTask, StartDefaultTask, osPriorityNormal, 0, 128);
 	defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
+
 	/* USER CODE BEGIN RTOS_THREADS */
 	xTaskCreate(task_gestion_aff_crep_aube,       /* Function that implements the task. */
 			"TASK_GESTION_AFF_CREP_AUBE",          /* Text name for the task. */
@@ -625,8 +655,8 @@ static void MX_CAN1_Init(void)
 	hcan1.Init.Prescaler = 16;
 	hcan1.Init.Mode = CAN_MODE_NORMAL;
 	hcan1.Init.SyncJumpWidth = CAN_SJW_1TQ;
-	hcan1.Init.TimeSeg1 = CAN_BS1_6TQ;
-	hcan1.Init.TimeSeg2 = CAN_BS2_4TQ;
+	hcan1.Init.TimeSeg1 = CAN_BS1_7TQ;
+	hcan1.Init.TimeSeg2 = CAN_BS2_2TQ;
 	hcan1.Init.TimeTriggeredMode = DISABLE;
 	hcan1.Init.AutoBusOff = DISABLE;
 	hcan1.Init.AutoWakeUp = DISABLE;
@@ -719,7 +749,9 @@ static void MX_LPUART1_UART_Init(void)
 	{
 		Error_Handler();
 	}
+	/* USER CODE BEGIN LPUART1_Init 2 */
 
+	/* USER CODE END LPUART1_Init 2 */
 
 }
 
@@ -819,7 +851,7 @@ static void MX_TIM2_Init(void)
 	htim2.Instance = TIM2;
 	htim2.Init.Prescaler = 0;
 	htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-	htim2.Init.Period = 4294967295;
+	htim2.Init.Period = 3999;
 	htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
 	htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
 	if (HAL_TIM_PWM_Init(&htim2) != HAL_OK)
@@ -869,7 +901,7 @@ static void MX_TIM3_Init(void)
 	htim3.Instance = TIM3;
 	htim3.Init.Prescaler = 0;
 	htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-	htim3.Init.Period = 65535;
+	htim3.Init.Period = 99;
 	htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
 	htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
 	if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
@@ -976,7 +1008,7 @@ static void MX_TIM8_Init(void)
 
 	/* USER CODE END TIM8_Init 1 */
 	htim8.Instance = TIM8;
-	htim8.Init.Prescaler = 0;
+	htim8.Init.Prescaler = 79;
 	htim8.Init.CounterMode = TIM_COUNTERMODE_UP;
 	htim8.Init.Period = 65535;
 	htim8.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
@@ -1035,6 +1067,22 @@ static void MX_TIM8_Init(void)
 }
 
 /**
+ * Enable DMA controller clock
+ */
+static void MX_DMA_Init(void)
+{
+
+	/* DMA controller clock enable */
+	__HAL_RCC_DMA1_CLK_ENABLE();
+
+	/* DMA interrupt init */
+	/* DMA1_Channel3_IRQn interrupt configuration */
+	HAL_NVIC_SetPriority(DMA1_Channel3_IRQn, 5, 0);
+	HAL_NVIC_EnableIRQ(DMA1_Channel3_IRQn);
+
+}
+
+/**
  * @brief GPIO Initialization Function
  * @param None
  * @retval None
@@ -1052,10 +1100,13 @@ static void MX_GPIO_Init(void)
 	__HAL_RCC_GPIOA_CLK_ENABLE();
 	__HAL_RCC_GPIOB_CLK_ENABLE();
 
+	/*Configure GPIO pin Output Level */
+	HAL_GPIO_WritePin(GPIOH, SHUT1_Pin|SHUT2_Pin, GPIO_PIN_RESET);
 
 	/*Configure GPIO pin Output Level */
 	HAL_GPIO_WritePin(DIR_GPIO_Port, DIR_Pin, GPIO_PIN_RESET);
-	HAL_GPIO_WritePin(GPIOH, SHUT1_Pin|SHUT2_Pin, GPIO_PIN_RESET);
+
+	/*Configure GPIO pin Output Level */
 	HAL_GPIO_WritePin(DIS_GPIO_Port, DIS_Pin, GPIO_PIN_RESET);
 
 	/*Configure GPIO pin : B1_Pin */
@@ -1083,7 +1134,6 @@ static void MX_GPIO_Init(void)
 	GPIO_InitStruct.Pull = GPIO_NOPULL;
 	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
 	HAL_GPIO_Init(DIR_GPIO_Port, &GPIO_InitStruct);
-
 
 	/*Configure GPIO pin : SW1_Pin */
 	GPIO_InitStruct.Pin = SW1_Pin;
@@ -1115,37 +1165,23 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-void aff_led(uint8_t niveau){
-	Affichages aff;
-	aff.led_valide = true;
-	aff.led_niveau = niveau;
-	xQueueSend(AffHandle, &aff, pdMS_TO_TICKS(100));
-}
 
-// Déclaration des fonctions
-
-static bool Alarme_active(){
-	xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
-	bool r = consignes.activer_alarme;
-	xSemaphoreGive(mtx_consignesHandle);
-	return r;
-}
-
-static bool Crep_active(){
-	xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
-	bool r = consignes.activer_crepuscule;
-	xSemaphoreGive(mtx_consignesHandle);
-	return r;
-}
+//----------------------------------------------------------------------------------
+//-------------Tache Affichage_aube/crep
+//----------------------------------------------------------------------------------
 
 void task_gestion_aff_crep_aube(void *pvParameters){
 
-	while(1){
-		if(Alarme_active()){
+	while(1)
+	{
+		if(Alarme_active())
+		{
 			uint32_t t = 0;
 
-			while(Alarme_active()){
-				if(t > DUREE_AUBE){
+			while(Alarme_active())
+			{
+				if(t > DUREE_AUBE)
+				{
 					t = DUREE_AUBE;
 				}
 				aff_led((uint8_t)((t * 255) / DUREE_AUBE));
@@ -1154,10 +1190,12 @@ void task_gestion_aff_crep_aube(void *pvParameters){
 			}
 			aff_led(0);
 		}
-		else if(Crep_active()){
+		else if(Crep_active())
+		{
 			uint32_t t = 0;
 
-			while(t <= DUREE_CREP && Crep_active() && !Alarme_active()){
+			while(t <= DUREE_CREP && Crep_active() && !Alarme_active())
+			{
 				aff_led((uint8_t)(255 - (t * 255) / DUREE_CREP));
 				vTaskDelay(pdMS_TO_TICKS(PERIODE_MAJ_LED));
 				t += PERIODE_MAJ_LED;
@@ -1167,16 +1205,17 @@ void task_gestion_aff_crep_aube(void *pvParameters){
 			consignes.activer_crepuscule = false;
 			xSemaphoreGive(mtx_consignesHandle);
 		}
-		else{
+		else
+		{
 			vTaskDelay(pdMS_TO_TICKS(PERIODE_MAJ_LED)); // Contuniation de la mélodie
 		}
 	}
 }
 
 
-/*----------------------------------------------------------------------------
- *        Taches
- *---------------------------------------------------------------------------*/
+//----------------------------------------------------------------------------------
+//-------------Tache gestion commandes
+//----------------------------------------------------------------------------------
 
 void GestionCommandTask (void *pvParameters)
 {
@@ -1281,6 +1320,9 @@ void GestionCommandTask (void *pvParameters)
 	}
 }
 
+//----------------------------------------------------------------------------------
+//-------------Tache TOF stop/snooze
+//----------------------------------------------------------------------------------
 
 void TofTask(void *argument)
 {
@@ -1334,6 +1376,9 @@ void TofTask(void *argument)
 	}
 }
 
+//----------------------------------------------------------------------------------
+//-------------Callback
+//----------------------------------------------------------------------------------
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
