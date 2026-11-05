@@ -64,14 +64,21 @@ typedef enum {
 } CommandeBluetoothType;
 
 typedef struct {
-    CommandeType type;
-    char str[20];
+	CommandeType type;
+	char str[20];
 } Commande;
+
+typedef struct
+{
+	bool led_valide; // Ordre pour les LEDS adressables
+	uint8_t led_niveau; //
+} Affichages;
 
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+
 #define NB_MELODIES 5 // à choisir selon les mélodies sauvegardées ne pas oublier de faire -1
 #define MAX_SEL_AFFICHAGE 3 // heure, temperature, QA, QS => 4-1=3
 
@@ -81,6 +88,11 @@ typedef struct {
 #define TOF_HOLD_MS 600
 #define TOF_SWIPE_WINDOW_MS 1000
 #define TOF_PERIOD_MS 20
+
+#define DUREE_AUBE 30000
+#define DUREE_CREP 30000
+#define PERIODE_MAJ_LED 100
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -114,9 +126,16 @@ SemaphoreHandle_t ConsignesMutexSemaphHandle;
 SemaphoreHandle_t HeureMutexSemaphHandle;
 SemaphoreHandle_t AlarmeMutexSemaphHandle;
 
+SemaphoreHandle_t mtx_consignesHandle;
+
 // mailbbox
 
 QueueHandle_t xQueueCommandes;
+QueueHandle_t AffHandle;
+
+// DECLARATION TACHES
+//xTaskHandle xTaskGestionAffCrepAube;
+
 
 /* USER CODE END PV */
 
@@ -146,11 +165,17 @@ bool SplitCommandBluetooth(char * cmd, int *seuil, Heure *horaire, CommandeBluet
 
 void TofTask(void *argument);
 void GestionCommandTask (void *pvParameters);
+
+void task_gestion_aff_crep_aube(void *pvParameters);
+void aff_led(uint8_t niveau);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+//----------------------------------------------------------------------------------
+//-------------Declaration de Variables globales
+//----------------------------------------------------------------------------------
 Consignes consignes;
 Heure heure = {0,0,0};
 Heure alarme = {0,0,0};
@@ -166,6 +191,10 @@ static VL53L1_Dev_t tof[2];
 static bool tofPresent[2];
 
 bool alarmeEnCours = true;
+
+//----------------------------------------------------------------------------------
+//-------------Fonction pour commandes bluetooth
+//----------------------------------------------------------------------------------
 
 static void SendCmd(CommandeType t)
 {
@@ -193,7 +222,6 @@ bool CommandBlutoothTypeExtraction(char *cmd, uint8_t *index, char *commandType)
 			haveCommand = false;
 		}
 	}
-
 	//ajout caractère fin de mot
 	commandType[*index] = '\0';
 
@@ -259,7 +287,6 @@ bool TimeExtraction(char *cmd, uint8_t *index, Heure *value)
 
 bool SplitCommandBluetooth(char * cmd, int *seuil, Heure *horaire, CommandeBluetoothType *type)
 {
-
 	//1ère partie: extraction du type de la commande
 	uint8_t indexmsg = 0; // index qui évolue au fil de l'évolution des fonctions, c'est voulu !!!
 	char msgCommandType[TAILLE_MAX_MSG_BLUETOOTH];
@@ -270,13 +297,10 @@ bool SplitCommandBluetooth(char * cmd, int *seuil, Heure *horaire, CommandeBluet
 	}
 
 	//2e partie conversion du type de commande
-
 	if(!ChooseBluetoothCommandType(msgCommandType,type) )
 		return false;
 
-
 	//3e partie décodage de la valeur
-
 	//a. on avance jusqu'à la valeur
 	while (cmd[indexmsg] == ' ' || cmd[indexmsg] == '=')
 	{
@@ -293,9 +317,13 @@ bool SplitCommandBluetooth(char * cmd, int *seuil, Heure *horaire, CommandeBluet
 		return false;
 	}
 
-
 	return true;
 }
+
+
+//----------------------------------------------------------------------------------
+//-------------Fonctions pour TOFs (snooze et stop)
+//----------------------------------------------------------------------------------
 
 static void TofInit(void)
 {
@@ -387,8 +415,8 @@ int main(void)
 	/* USER CODE BEGIN 2 */
 
 
-  HAL_UART_Receive_IT(&hlpuart1, (uint8_t *) &bluetoothChar, 1);
-  /* USER CODE END 2 */
+	HAL_UART_Receive_IT(&hlpuart1, (uint8_t *) &bluetoothChar, 1);
+	/* USER CODE END 2 */
 
 
 	/* USER CODE BEGIN RTOS_MUTEX */
@@ -397,6 +425,7 @@ int main(void)
 
 	/* USER CODE BEGIN RTOS_SEMAPHORES */
 	/* add semaphores, ... */
+	mtx_consignesHandle = xSemaphoreCreateMutex();
 
 	ConsignesMutexSemaphHandle = xSemaphoreCreateMutex();
 	HeureMutexSemaphHandle = xSemaphoreCreateMutex();
@@ -408,24 +437,34 @@ int main(void)
 	/* start timers, add new ones, ... */
 	/* USER CODE END RTOS_TIMERS */
 
-  /* USER CODE BEGIN RTOS_QUEUES */
-  /* add queues, ... */
-  xQueueCommandes = xQueueCreate(10, sizeof(Commande));
-  /* USER CODE END RTOS_QUEUES */
+	/* USER CODE BEGIN RTOS_QUEUES */
+	/* add queues, ... */
+	xQueueCommandes = xQueueCreate(10, sizeof(Commande));
+
+	AffHandle = xQueueCreate(4, sizeof(Affichages) );
+
+	/* USER CODE END RTOS_QUEUES */
 
 
 	/* Create the thread(s) */
 	/* definition and creation of defaultTask */
 	osThreadDef(defaultTask, StartDefaultTask, osPriorityNormal, 0, 128);
 	defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
-  /* USER CODE BEGIN RTOS_THREADS */
-  /* add threads, ... */
-  xTaskCreate(      TofTask,       /* Function that implements the task. */
-                      "TofTask",          /* Text name for the task. */
-                      1024,      /* Stack size in words, not bytes. */
-                      NULL,    /* Parameter passed into the task. */
-                      tskIDLE_PRIORITY+5,/* Priority at which the task is created. */
-                      NULL );      /* Used to pass out the created task's handle. */
+	/* USER CODE BEGIN RTOS_THREADS */
+	xTaskCreate(task_gestion_aff_crep_aube,       /* Function that implements the task. */
+			"TASK_GESTION_AFF_CREP_AUBE",          /* Text name for the task. */
+			1024,      /* Stack size in words, not bytes. */
+			NULL,    /* Parameter passed into the task. */
+			tskIDLE_PRIORITY+8,/* Priority at which the task is created. */
+			NULL );      /* Used to pass out the created task's handle. */
+
+	/* add threads, ... */
+	xTaskCreate(      TofTask,       /* Function that implements the task. */
+			"TofTask",          /* Text name for the task. */
+			1024,      /* Stack size in words, not bytes. */
+			NULL,    /* Parameter passed into the task. */
+			tskIDLE_PRIORITY+5,/* Priority at which the task is created. */
+			NULL );      /* Used to pass out the created task's handle. */
 
 	xTaskCreate(      GestionCommandTask,       /* Function that implements the task. */
 			"Commandes",          /* Text name for the task. */
@@ -666,20 +705,20 @@ static void MX_LPUART1_UART_Init(void)
 
 	/* USER CODE BEGIN LPUART1_Init 1 */
 
-  /* USER CODE END LPUART1_Init 1 */
-  hlpuart1.Instance = LPUART1;
-  hlpuart1.Init.BaudRate = 9600;
-  hlpuart1.Init.WordLength = UART_WORDLENGTH_8B;
-  hlpuart1.Init.StopBits = UART_STOPBITS_1;
-  hlpuart1.Init.Parity = UART_PARITY_NONE;
-  hlpuart1.Init.Mode = UART_MODE_TX_RX;
-  hlpuart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-  hlpuart1.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
-  hlpuart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
-  if (HAL_UART_Init(&hlpuart1) != HAL_OK)
-  {
-    Error_Handler();
-  }
+	/* USER CODE END LPUART1_Init 1 */
+	hlpuart1.Instance = LPUART1;
+	hlpuart1.Init.BaudRate = 9600;
+	hlpuart1.Init.WordLength = UART_WORDLENGTH_8B;
+	hlpuart1.Init.StopBits = UART_STOPBITS_1;
+	hlpuart1.Init.Parity = UART_PARITY_NONE;
+	hlpuart1.Init.Mode = UART_MODE_TX_RX;
+	hlpuart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+	hlpuart1.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+	hlpuart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+	if (HAL_UART_Init(&hlpuart1) != HAL_OK)
+	{
+		Error_Handler();
+	}
 
 
 }
@@ -1025,18 +1064,18 @@ static void MX_GPIO_Init(void)
 	GPIO_InitStruct.Pull = GPIO_NOPULL;
 	HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : SHUT1_Pin SHUT2_Pin */
-  GPIO_InitStruct.Pin = SHUT1_Pin|SHUT2_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOH, &GPIO_InitStruct);
+	/*Configure GPIO pins : SHUT1_Pin SHUT2_Pin */
+	GPIO_InitStruct.Pin = SHUT1_Pin|SHUT2_Pin;
+	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+	GPIO_InitStruct.Pull = GPIO_NOPULL;
+	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+	HAL_GPIO_Init(GPIOH, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : SW2_Pin */
-  GPIO_InitStruct.Pin = SW2_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(SW2_GPIO_Port, &GPIO_InitStruct);
+	/*Configure GPIO pin : SW2_Pin */
+	GPIO_InitStruct.Pin = SW2_Pin;
+	GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+	GPIO_InitStruct.Pull = GPIO_NOPULL;
+	HAL_GPIO_Init(SW2_GPIO_Port, &GPIO_InitStruct);
 
 	/*Configure GPIO pin : DIR_Pin */
 	GPIO_InitStruct.Pin = DIR_Pin;
@@ -1046,36 +1085,94 @@ static void MX_GPIO_Init(void)
 	HAL_GPIO_Init(DIR_GPIO_Port, &GPIO_InitStruct);
 
 
-  /*Configure GPIO pin : SW1_Pin */
-  GPIO_InitStruct.Pin = SW1_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(SW1_GPIO_Port, &GPIO_InitStruct);
+	/*Configure GPIO pin : SW1_Pin */
+	GPIO_InitStruct.Pin = SW1_Pin;
+	GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+	GPIO_InitStruct.Pull = GPIO_NOPULL;
+	HAL_GPIO_Init(SW1_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : INTOF2_Pin INTOF1_Pin */
-  GPIO_InitStruct.Pin = INTOF2_Pin|INTOF1_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+	/*Configure GPIO pins : INTOF2_Pin INTOF1_Pin */
+	GPIO_InitStruct.Pin = INTOF2_Pin|INTOF1_Pin;
+	GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+	GPIO_InitStruct.Pull = GPIO_NOPULL;
+	HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : DIS_Pin */
-  GPIO_InitStruct.Pin = DIS_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(DIS_GPIO_Port, &GPIO_InitStruct);
+	/*Configure GPIO pin : DIS_Pin */
+	GPIO_InitStruct.Pin = DIS_Pin;
+	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+	GPIO_InitStruct.Pull = GPIO_NOPULL;
+	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+	HAL_GPIO_Init(DIS_GPIO_Port, &GPIO_InitStruct);
 
-  /* EXTI interrupt init*/
-  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 5, 0);
-  HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
+	/* EXTI interrupt init*/
+	HAL_NVIC_SetPriority(EXTI15_10_IRQn, 5, 0);
+	HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
 
-  /* USER CODE BEGIN MX_GPIO_Init_2 */
+	/* USER CODE BEGIN MX_GPIO_Init_2 */
 
 
 	/* USER CODE END MX_GPIO_Init_2 */
 }
 
 /* USER CODE BEGIN 4 */
+void aff_led(uint8_t niveau){
+	Affichages aff;
+	aff.led_valide = true;
+	aff.led_niveau = niveau;
+	xQueueSend(AffHandle, &aff, pdMS_TO_TICKS(100));
+}
+
+// Déclaration des fonctions
+
+static bool Alarme_active(){
+	xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
+	bool r = consignes.activer_alarme;
+	xSemaphoreGive(mtx_consignesHandle);
+	return r;
+}
+
+static bool Crep_active(){
+	xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
+	bool r = consignes.activer_crepuscule;
+	xSemaphoreGive(mtx_consignesHandle);
+	return r;
+}
+
+void task_gestion_aff_crep_aube(void *pvParameters){
+
+	while(1){
+		if(Alarme_active()){
+			uint32_t t = 0;
+
+			while(Alarme_active()){
+				if(t > DUREE_AUBE){
+					t = DUREE_AUBE;
+				}
+				aff_led((uint8_t)((t * 255) / DUREE_AUBE));
+				vTaskDelay(pdMS_TO_TICKS(PERIODE_MAJ_LED));
+				t += PERIODE_MAJ_LED;
+			}
+			aff_led(0);
+		}
+		else if(Crep_active()){
+			uint32_t t = 0;
+
+			while(t <= DUREE_CREP && Crep_active() && !Alarme_active()){
+				aff_led((uint8_t)(255 - (t * 255) / DUREE_CREP));
+				vTaskDelay(pdMS_TO_TICKS(PERIODE_MAJ_LED));
+				t += PERIODE_MAJ_LED;
+			}
+			aff_led(0);
+			xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
+			consignes.activer_crepuscule = false;
+			xSemaphoreGive(mtx_consignesHandle);
+		}
+		else{
+			vTaskDelay(pdMS_TO_TICKS(PERIODE_MAJ_LED)); // Contuniation de la mélodie
+		}
+	}
+}
+
 
 /*----------------------------------------------------------------------------
  *        Taches
@@ -1130,56 +1227,56 @@ void GestionCommandTask (void *pvParameters)
 			}
 			break;
 
-		case CMD_SET_AFFICHAGE:
-			if(consignes.sel_affichage >= MAX_SEL_AFFICHAGE)
-			{
+			case CMD_SET_AFFICHAGE:
+				if(consignes.sel_affichage >= MAX_SEL_AFFICHAGE)
+				{
+					xSemaphoreTake(ConsignesMutexSemaphHandle, portMAX_DELAY);
+					consignes.sel_affichage = 0;
+					xSemaphoreGive(ConsignesMutexSemaphHandle);
+				}
+				else
+				{
+					xSemaphoreTake(ConsignesMutexSemaphHandle, portMAX_DELAY);
+					consignes.sel_affichage += 1;
+					xSemaphoreGive(ConsignesMutexSemaphHandle);
+				}
+				break;
+
+			case CMD_SET_MELODIE:
+				if(consignes.sel_melodie >= NB_MELODIES)
+				{
+					xSemaphoreTake(ConsignesMutexSemaphHandle, portMAX_DELAY);
+					consignes.sel_melodie = 0;
+					xSemaphoreGive(ConsignesMutexSemaphHandle);
+				}
+				else
+				{
+					xSemaphoreTake(ConsignesMutexSemaphHandle, portMAX_DELAY);
+					consignes.sel_melodie += 1;
+					xSemaphoreGive(ConsignesMutexSemaphHandle);
+				}
+				break;
+
+			case CMD_SET_CREPUSCULE:
 				xSemaphoreTake(ConsignesMutexSemaphHandle, portMAX_DELAY);
-				consignes.sel_affichage = 0;
+				consignes.activer_crepuscule = true;
 				xSemaphoreGive(ConsignesMutexSemaphHandle);
-			}
-			else
-			{
+				break;
+
+			case CMD_SNOOZE:
 				xSemaphoreTake(ConsignesMutexSemaphHandle, portMAX_DELAY);
-				consignes.sel_affichage += 1;
+				consignes.snooze_alarme = true;
 				xSemaphoreGive(ConsignesMutexSemaphHandle);
-			}
-			break;
+				break;
 
-		case CMD_SET_MELODIE:
-			if(consignes.sel_melodie >= NB_MELODIES)
-			{
+			case CMD_STOP_REVEIL:
 				xSemaphoreTake(ConsignesMutexSemaphHandle, portMAX_DELAY);
-				consignes.sel_melodie = 0;
+				consignes.stop_alarme = true;
 				xSemaphoreGive(ConsignesMutexSemaphHandle);
-			}
-			else
-			{
-				xSemaphoreTake(ConsignesMutexSemaphHandle, portMAX_DELAY);
-				consignes.sel_melodie += 1;
-				xSemaphoreGive(ConsignesMutexSemaphHandle);
-			}
-			break;
+				break;
 
-		case CMD_SET_CREPUSCULE:
-			xSemaphoreTake(ConsignesMutexSemaphHandle, portMAX_DELAY);
-			consignes.activer_crepuscule = true;
-			xSemaphoreGive(ConsignesMutexSemaphHandle);
-			break;
-
-		case CMD_SNOOZE:
-			xSemaphoreTake(ConsignesMutexSemaphHandle, portMAX_DELAY);
-			consignes.snooze_alarme = true;
-			xSemaphoreGive(ConsignesMutexSemaphHandle);
-			break;
-
-		case CMD_STOP_REVEIL:
-			xSemaphoreTake(ConsignesMutexSemaphHandle, portMAX_DELAY);
-			consignes.stop_alarme = true;
-			xSemaphoreGive(ConsignesMutexSemaphHandle);
-			break;
-
-		default:
-			break;
+			default:
+				break;
 		}
 	}
 }
@@ -1224,7 +1321,7 @@ void TofTask(void *argument)
 			if (cur && !locked && (now - start[i]) >= pdMS_TO_TICKS(TOF_HOLD_MS))
 			{
 				if(alarmeEnCours)
-				SendCmd(CMD_STOP_REVEIL);
+					SendCmd(CMD_STOP_REVEIL);
 				locked = true;
 			}
 			prev[i] = cur;
