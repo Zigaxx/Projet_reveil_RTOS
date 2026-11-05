@@ -152,6 +152,8 @@ typedef struct
 
 #define PERIODE_HORLOGE  1000
 
+
+#define SNOOZE_MIN  1 // Temps du snooze du reveil
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -180,7 +182,6 @@ DMA_HandleTypeDef hdma_tim3_ch4_up;
 osThreadId defaultTaskHandle;
 /* USER CODE BEGIN PV */
 
-
 //semaphores
 
 SemaphoreHandle_t mtx_consignesHandle;
@@ -191,7 +192,6 @@ SemaphoreHandle_t AlarmeMutexSemaphHandle;
 
 QueueHandle_t xQueueCommandes;
 QueueHandle_t AffHandle;
-
 
 
 const Note mel_beep[] = { {2000,200}, {0,200} };
@@ -212,23 +212,26 @@ xTaskHandle xTaskGestionAffCrepAube;
 xTaskHandle xTaskInterfaceActions;
 xTaskHandle xTaskInterfaceAff;
 xTaskHandle xTaskGestionHorloge;
+xTaskHandle xTaskGestionAlarme;
 
 // DECLARATION SEMAPHORES
-xSemaphoreHandle sem_ledHandle; // fin de trame DMA
-xSemaphoreHandle mtx_adcHandle;
-xSemaphoreHandle mtx_consignesHandle;
-xSemaphoreHandle mtx_i2cHandle;
-xSemaphoreHandle mtx_consignesHandle;
-xSemaphoreHandle sem_alarmeHandle;
-xSemaphoreHandle mtx_heureHandle;
+SemaphoreHandle_t sem_ledHandle; // fin de trame DMA
+SemaphoreHandle_t mtx_adcHandle;
+SemaphoreHandle_t mtx_consignesHandle;
+SemaphoreHandle_t mtx_i2cHandle;
+SemaphoreHandle_t mtx_consignesHandle;
+SemaphoreHandle_t sem_alarmeHandle;
+SemaphoreHandle_t mtx_heureHandle;
+SemaphoreHandle_t mtx_consignesHandle;
+SemaphoreHandle_t mtx_consignesHandle;
+SemaphoreHandle_t HeureMutexSemaphHandle;
+SemaphoreHandle_t AlarmeMutexSemaphHandle;
 
 // MAILBOXES
-xQueueHandle AffHandle;
-xQueueHandle InfosHandle;
-xQueueHandle AffHandle;
-
-// FONCTIONS
-
+QueueHandle_t AffHandle;
+QueueHandle_t InfosHandle;
+QueueHandle_t AffHandle;
+QueueHandle_t ActionsHandle;
 
 /* USER CODE END PV */
 
@@ -279,6 +282,10 @@ void Heure_Incrementer(Heure *h);
 bool Heure_Egales(Heure a, Heure b);
 void Aff_ecran(Heure h, uint16_t sel, uint16_t valeur, bool retro);
 void task_gestion_horloge(void *pvParameters);
+
+void Act_alarme(bool on); // Activer la melodie de l'alarme
+Heure Set_alarme(Heure base,int delta); // Reglage de l'alarme (le snooze y compris)
+void task_gestion_alarme(void *pvParameters);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -302,7 +309,6 @@ uint16_t time_tof2;
 static VL53L1_Dev_t tof[2];
 static bool tofPresent[2];
 
-bool alarmeEnCours = true;
 
 //----------------------------------------------------------------------------------
 //-------------Fonction pour commandes bluetooth
@@ -595,6 +601,9 @@ void Ecran_Afficher(const Affichages *a){
 	snprintf(l1, sizeof(l1), "%02u:%02u:%02u",(unsigned)a->ecran_heure.h, (unsigned)a->ecran_heure.min, (unsigned)a->ecran_heure.sec);
 
 	switch (a->ecran_sel) {
+	case 0:
+		snprintf(l2, sizeof(l2), "%02u:%02u:%02u",(unsigned)alarme.h, (unsigned)alarme.min, (unsigned)alarme.sec);
+		break;
 	case 1:
 		snprintf(l2, sizeof(l2), "Temp: %u C", (unsigned)a->ecran_valeur);
 		break;
@@ -609,13 +618,21 @@ void Ecran_Afficher(const Affichages *a){
 		break;
 	}
 
-	ssd1306_Fill(Black);
+	if (a->ecran_retro)
+	{
+	    ssd1306_Fill(White);  // Fond blanc
+	    // Écrire le texte en noir
+	}
+	else
+	{
+	    ssd1306_Fill(Black);  // Fond noir
+	    // Écrire le texte en blanc
+	}
 	ssd1306_SetCursor(0, 0);
 	ssd1306_WriteString(l1, Font_11x18, White);
 	ssd1306_SetCursor(0, 30);
 	ssd1306_WriteString(l2, Font_11x18, White);
 	xSemaphoreTake(mtx_i2cHandle, portMAX_DELAY);
-	ssd1306_SetContrast(a->ecran_retro ? 0xFF : 0x40);
 	ssd1306_UpdateScreen();
 	xSemaphoreGive(mtx_i2cHandle);
 }
@@ -692,7 +709,6 @@ int main(void)
 	/* add mutexes, ... */
 	/* USER CODE END RTOS_MUTEX */
 
-
 	/* USER CODE BEGIN RTOS_SEMAPHORES */
 	/* add semaphores, ... */
 	mtx_consignesHandle = xSemaphoreCreateMutex();
@@ -706,18 +722,27 @@ int main(void)
 	AlarmeMutexSemaphHandle = xSemaphoreCreateMutex();
 	/* USER CODE END RTOS_SEMAPHORES */
 
-
-	/* USER CODE BEGIN RTOS_TIMERS */
-	/* start timers, add new ones, ... */
-	/* USER CODE END RTOS_TIMERS */
-
 	/* USER CODE BEGIN RTOS_QUEUES */
 	/* add queues, ... */
 	InfosHandle = xQueueCreate(1, sizeof(Infos) );
 	xQueueCommandes = xQueueCreate(10, sizeof(Commande));
 	AffHandle = xQueueCreate(4, sizeof(Affichages) );
+	ActionsHandle = xQueueCreate(4, sizeof( int) );
 	/* USER CODE END RTOS_QUEUES */
 
+	/* USER CODE BEGIN RTOS_TIMERS */
+	/* start timers, add new ones, ... */
+	/* USER CODE END RTOS_TIMERS */
+
+	/* USER CODE BEGIN RTOS_THREADS */
+	xTaskCreate(task_gestion_alarme,       /* Function that implements the task. */
+			"TASK_GESTION_ALARME",          /* Text name for the task. */
+			1024,      /* Stack size in words, not bytes. */
+			NULL,    /* Parameter passed into the task. */
+			tskIDLE_PRIORITY+10,/* Priority at which the task is created. */
+			&xTaskGestionAlarme  );      /* Used to pass out the created task's handle. */
+	/* add threads, ... */
+	/* USER CODE END RTOS_THREADS */
 
 	/* USER CODE BEGIN RTOS_THREADS */
 	osThreadDef(defaultTask, StartDefaultTask, osPriorityNormal, 0, 128);
@@ -1670,7 +1695,6 @@ void GestionCommandTask (void *pvParameters)
 			case CMD_STOP_REVEIL:
 				xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
 				consignes.stop_alarme = true;
-				consignes.activer_alarme = false;
 				xSemaphoreGive(mtx_consignesHandle);
 				break;
 
@@ -1710,12 +1734,17 @@ void TofTask(void *argument)
 			if (cur && !prev[i]) // main arrive sur i
 			{
 				start[i] = now;
-				if (!locked && lastFallIdx == 1 - i &&
-						(now - lastFall) < pdMS_TO_TICKS(TOF_SWIPE_WINDOW_MS))
+				if (!locked && lastFallIdx == 1 - i && (now - lastFall) < pdMS_TO_TICKS(TOF_SWIPE_WINDOW_MS))
 				{
-					if(alarmeEnCours)
+					xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
+					bool alarme_active = consignes.activer_alarme;
+					xSemaphoreGive(mtx_consignesHandle);
+
+					if (alarme_active)
+					{
 						SendCmd(CMD_SNOOZE);
-					locked = true;
+						locked = true;
+					}
 				}
 			}
 			else if (!cur && prev[i]) // main quitte i
@@ -1724,12 +1753,21 @@ void TofTask(void *argument)
 				lastFallIdx = i;
 			}
 
-			if (cur && !locked && (now - start[i]) >= pdMS_TO_TICKS(TOF_HOLD_MS))
+			if (tofPresent[0] && tofPresent[1] && !locked)
 			{
-				if(alarmeEnCours)
-					SendCmd(CMD_STOP_REVEIL);
-				locked = true;
+				if ((now - start[0]) >= pdMS_TO_TICKS(TOF_HOLD_MS) &&(now - start[1]) >= pdMS_TO_TICKS(TOF_HOLD_MS))
+				{
+					xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
+					bool alarme_active = consignes.activer_alarme;
+					xSemaphoreGive(mtx_consignesHandle);
+					if (alarme_active)
+					{
+						SendCmd(CMD_STOP_REVEIL);
+						locked = true;
+					}
+				}
 			}
+
 			prev[i] = cur;
 		}
 
@@ -1933,6 +1971,88 @@ void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
 
 
 
+// FONCTIONS //
+void Act_alarme(bool on){
+	Actions action;
+	action.alarme_valide = true;
+	action.act_alarme = on;
+	xQueueSend(ActionsHandle, &action, pdMS_TO_TICKS(100));
+}
+
+Heure Set_alarme(Heure base,int delta){
+	Heure alarme = base;
+	int total = base.h*60 + base.min + delta;
+	alarme.h = total / 60;
+	alarme.min = total % 60;
+	alarme.sec = base.sec;
+	return alarme;
+}
+
+// TACHES //
+
+void task_gestion_alarme(void *pvParameters){
+	Heure alarme_base;
+	bool snooze_actif = false;
+	while(1)
+	{
+		xSemaphoreTake(sem_alarmeHandle, portMAX_DELAY); // On bloque jusqu'au signla activer_alarme
+
+		xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY); // Sauvegarde alarme de base
+		if(snooze_actif == false)
+		{
+			alarme_base = alarme;
+		}
+
+		consignes.stop_alarme = false;
+		consignes.snooze_alarme = false;
+		xSemaphoreGive(mtx_consignesHandle);
+
+		Act_alarme(true);
+
+		// Attente stop ou snooze
+		bool fini = false;
+		while(fini != true)
+		{
+			bool stop,snooze;
+			xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
+			stop = consignes.stop_alarme;
+			snooze = consignes.snooze_alarme;
+			xSemaphoreGive(mtx_consignesHandle);
+
+			if(stop == true)
+			{
+				xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
+				if(snooze_actif == true){// Reconduite du reveil au lendemain
+					xSemaphoreTake(AlarmeMutexSemaphHandle,portMAX_DELAY);
+					alarme = alarme_base;
+					xSemaphoreGive(AlarmeMutexSemaphHandle);
+				}
+				consignes.activer_alarme = false;
+				consignes.stop_alarme = false;
+				xSemaphoreGive(mtx_consignesHandle);
+				snooze_actif = false;
+				fini = true;
+			}
+			else if(snooze == true)
+			{
+				xSemaphoreTake(AlarmeMutexSemaphHandle,portMAX_DELAY);
+				alarme = Set_alarme(alarme_base,SNOOZE_MIN);
+				xSemaphoreGive(AlarmeMutexSemaphHandle);
+				xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
+				consignes.activer_alarme = false;
+				consignes.stop_alarme = false;
+				xSemaphoreGive(mtx_consignesHandle);
+				snooze_actif = true;
+				fini = true;
+			}
+			else
+			{
+				vTaskDelay(pdMS_TO_TICKS(50)); // Contuniation de la mélodie
+			}
+		}
+		Act_alarme(false);
+	}
+}
 /* USER CODE END 4 */
 
 /* USER CODE BEGIN Header_StartDefaultTask */
