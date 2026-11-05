@@ -121,7 +121,7 @@ typedef struct
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 
-#define NB_MELODIES 2 // à choisir selon les mélodies sauvegardées. Faire -1 par rapport au nombre réel
+#define NB_MELODIES 3 // à choisir selon les mélodies sauvegardées. Faire -1 par rapport au nombre réel
 #define MAX_SEL_AFFICHAGE 3 // heure, temperature, QA, QS => 4-1=3
 
 #define TAILLE_MAX_MSG_BLUETOOTH 20
@@ -154,6 +154,30 @@ typedef struct
 
 
 #define SNOOZE_MIN  1 // Temps du snooze du reveil
+
+
+#define PERIODE_ACQ_MS      (1000)
+#define PERIODE_HORLOGE     1000
+#define PERIODE_MAJ_LED     100
+#define NB_TOF              4
+#define LDR_ADC             0                // rang dans le scan ADC
+#define POT_ADC             1
+#define SGP40_ADDR          (0x59 << 1)
+
+#define NB_LEDS             4
+#define LED_BITS            (NB_LEDS*24)
+#define LED_RESET_SLOTS     48
+#define LED_T0              32
+#define LED_T1              64
+
+#define BALAYAGE_BORNE      500
+#define BALAYAGE_PAS        50
+#define BALAYAGE_MAX        5000
+
+#define TC72_REG_CONTROL      0x00
+#define TC72_REG_TEMP_MSB     0x01
+#define TC72_REG_TEMP_LSB     0x02
+#define TC72_REG_CONTROL_ID   0x03
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -193,19 +217,6 @@ SemaphoreHandle_t AlarmeMutexSemaphHandle;
 QueueHandle_t xQueueCommandes;
 QueueHandle_t AffHandle;
 
-
-const Note mel_beep[] = { {2000,200}, {0,200} };
-const Note mel_1[]    = { {523,200}, {659,200}, {784,200}, {1047,400}, {0,300} };
-const Note mel_2[]    = { {784,150}, {988,150}, {1175,150}, {1568,300}, {0,400} };
-
-const Melodie melodies[] = {
-		{ mel_beep, sizeof(mel_beep)/sizeof(Note) },    // 0 = beep
-		{ mel_1,    sizeof(mel_1)/sizeof(Note)    },
-		{ mel_2,    sizeof(mel_2)/sizeof(Note)    },
-};
-
-uint16_t led_buffer[LED_BITS + LED_RESET_SLOTS];
-
 // DECLARATION TACHES
 
 xTaskHandle xTaskGestionAffCrepAube;
@@ -219,13 +230,10 @@ SemaphoreHandle_t sem_ledHandle; // fin de trame DMA
 SemaphoreHandle_t mtx_adcHandle;
 SemaphoreHandle_t mtx_consignesHandle;
 SemaphoreHandle_t mtx_i2cHandle;
-SemaphoreHandle_t mtx_consignesHandle;
 SemaphoreHandle_t sem_alarmeHandle;
-SemaphoreHandle_t mtx_heureHandle;
-SemaphoreHandle_t mtx_consignesHandle;
-SemaphoreHandle_t mtx_consignesHandle;
 SemaphoreHandle_t HeureMutexSemaphHandle;
 SemaphoreHandle_t AlarmeMutexSemaphHandle;
+SemaphoreHandle_t mtx_infosHandle;
 
 // MAILBOXES
 QueueHandle_t AffHandle;
@@ -267,7 +275,7 @@ void aff_led(uint8_t niveau);
 void task_interface_actions(void *pvParameters);
 void task_interface_aff(void *pvParameters);
 
-uint16_t ADC_Lire(uint32_t canal);
+uint16_t ADC_Lire(uint8_t canal);
 // Buzzer
 void Buzzer_Note(uint16_t freq);
 TickType_t Delai(TickType_t echeance, TickType_t now);
@@ -298,6 +306,7 @@ void task_gestion_alarme(void *pvParameters);
 Consignes consignes;
 Heure heure = {0,0,0};
 Heure alarme = {0,0,0};
+Infos infos_acq = {0};
 
 uint8_t bluetoothChar;
 char bluetoothMsg[TAILLE_MAX_MSG_BLUETOOTH];
@@ -308,6 +317,94 @@ uint16_t time_tof2;
 
 static VL53L1_Dev_t tof[2];
 static bool tofPresent[2];
+
+const Note mel_beep[] = { {2000,200}, {0,200} };
+const Note mel_1[]    = { {523,200}, {659,200}, {784,200}, {1047,400}, {0,300} };
+
+const Note mel_2[]    = {
+		// Marche impériale - première phrase
+		{392, 500}, {0, 150},  // Sol
+		{392, 500}, {0, 150},  // Sol
+		{392, 500}, {0, 150},  // Sol
+		{311, 350}, {0, 150},  // Mib
+		{466, 150}, {0, 75},   // Sib rapide
+		{392, 500}, {0, 150},  // Sol
+		{311, 350}, {0, 150},  // Mib
+		{466, 150}, {0, 75},   // Sib rapide
+		{392, 900}, {0, 150},  // Sol long
+
+		// Deuxième phrase
+		{587, 500}, {0, 150},  // Ré
+		{587, 500}, {0, 150},  // Ré
+		{587, 500}, {0, 150},  // Ré
+		{622, 350}, {0, 150},  // Mib
+		{466, 150}, {0, 75},   // Sib rapide
+		{370, 500}, {0, 150},  // Fa#
+		{311, 350}, {0, 150},  // Mib
+		{466, 150}, {0, 75},   // Sib rapide
+		{392, 900},            // Sol final
+
+		{0, 500}               // Silence final
+};
+
+const Note mel_3[] = {
+		{523, 300}, {587, 300}, {659, 300}, {523, 300}, // Frère Jacques, frère Jacques
+		{523, 300}, {587, 300}, {659, 300}, {523, 300}, // Dormez-vous ? dormez-vous ?
+		{659, 300}, {698, 300}, {784, 600},             // Sonnez les matines, sonnez les matines
+		{659, 300}, {698, 300}, {784, 600},             // Sonnez les matines, sonnez les matines
+		{523, 300}, {392, 300}, {523, 600},             // Din, dan, don, din, dan, don
+		{0, 400} };
+
+const Melodie melodies[] = {
+		{ mel_beep, sizeof(mel_beep)/sizeof(Note) },    // 0 = beep
+		{ mel_1,    sizeof(mel_1)/sizeof(Note)    },
+		{ mel_2,    sizeof(mel_2)/sizeof(Note)    },
+		{ mel_3,    sizeof(mel_3)/sizeof(Note)    },
+};
+
+uint16_t led_buffer[LED_BITS + LED_RESET_SLOTS];
+
+uint16_t sgp40_baseline = 0;
+
+//----------------------------------------------------------------------------------
+//-------------Fonction pour horloge et alarme
+//----------------------------------------------------------------------------------
+
+void Heure_Incrementer(Heure *h)
+{
+	h->sec++;
+	if(h->sec >= 60)
+	{
+		h->sec = 0;
+		h->min++;
+	}
+	if(h->min >= 60)
+	{
+		h->min = 0;
+		h->h++;
+	}
+	if(h->h >= 24)
+	{
+		h->h = 0;
+	}
+}
+
+bool Heure_Egales(Heure a, Heure b){
+	if( (a.h == b.h) && (a.min == b.min) && (a.sec == b.sec)){
+		return true;
+	}
+	return false;
+}
+
+void Aff_ecran(Heure h, uint16_t sel, uint16_t valeur, bool retro){
+	Affichages aff;
+	aff.ecran_heure = h;
+	aff.ecran_sel = sel;
+	aff.ecran_valide = true;
+	aff.ecran_retro = retro;
+	aff.ecran_valeur = valeur;
+	xQueueSend(AffHandle, &aff, pdMS_TO_TICKS(10));   // si pleine, la MAJ de la seconde suivante rattrapera
+}
 
 
 //----------------------------------------------------------------------------------
@@ -495,7 +592,7 @@ static void TofUpdate(int i)
 
 
 void aff_led(uint8_t niveau){
-	Affichages aff;
+	Affichages aff = {0};
 	aff.led_valide = true;
 	aff.led_niveau = niveau;
 	xQueueSend(AffHandle, &aff, pdMS_TO_TICKS(100));
@@ -516,80 +613,6 @@ static bool Crep_active(){
 	xSemaphoreGive(mtx_consignesHandle);
 	return r;
 }
-
-//----------------------------------------------------------------------------------
-//-------------Fonctions ADC
-//----------------------------------------------------------------------------------
-
-uint16_t ADC_Lire(uint32_t canal)
-{
-	uint8_t valeur[2];
-
-	xSemaphoreTake(mtx_adcHandle,portMAX_DELAY);
-	HAL_ADC_Start(&hadc1);
-	for (int i = 0; i < 2; i++) {
-		if(HAL_ADC_PollForConversion(&hadc1,10) == HAL_OK){
-			valeur[i] = (uint16_t)HAL_ADC_GetValue(&hadc1);
-		}
-	}
-	HAL_ADC_Stop(&hadc1);
-
-	xSemaphoreGive(mtx_adcHandle);
-	return valeur[canal];
-}
-
-//----------------------------------------------------------------------------------
-//-------------Fonctions Buzzer
-//----------------------------------------------------------------------------------
-
-
-void Buzzer_Note(uint16_t freq)
-{
-	if(freq == 0){
-		__HAL_TIM_SET_COMPARE(&htim2,TIM_CHANNEL_1,0);
-	}
-	else{
-		uint32_t arr = 1000000/freq -1;
-		__HAL_TIM_SET_AUTORELOAD(&htim8,arr);
-		__HAL_TIM_SET_COMPARE(&htim2,TIM_CHANNEL_1,arr/2); // On mets le volume à 50 %
-	}
-}
-
-TickType_t Delai(TickType_t echeance, TickType_t now)
-{
-	int d = echeance - now;
-	if(d > 0){
-		return (TickType_t)d;
-	}
-	return 0;
-}
-
-//----------------------------------------------------------------------------------
-//-------------Fonctions Leds
-//----------------------------------------------------------------------------------
-
-void Leds_Envoyer(uint8_t niveau){
-	uint32_t n = ((uint32_t)niveau * niveau) / 255;
-	uint32_t r = n;
-	uint32_t g = (n * 150) / 255;
-	uint32_t b = (n * 30) / 255;
-	uint32_t grb = (g << 16) | (r << 8) | b;
-
-	for (int i = 0; i < NB_LEDS; i++) {
-		for (int j = 0; j < 24; ++j) {
-			led_buffer[i*24 + j] = (grb & (1UL << (23 - j))) ? LED_T1 : LED_T0;
-		}
-	}
-
-	for (int i = 0; i < LED_RESET_SLOTS; ++i) {
-		led_buffer[LED_BITS + i] = 0;
-	}
-
-	HAL_TIM_PWM_Start_DMA(&htim3, TIM_CHANNEL_4, (uint32_t*)led_buffer, LED_BITS + LED_RESET_SLOTS);
-	xSemaphoreTake(sem_ledHandle, pdMS_TO_TICKS(20));
-	HAL_TIM_PWM_Stop_DMA(&htim3, TIM_CHANNEL_4);
-}
-
 
 //----------------------------------------------------------------------------------
 //-------------Fonctions Affichage
@@ -640,18 +663,130 @@ void Ecran_Afficher(const Affichages *a){
 }
 
 //----------------------------------------------------------------------------------
+//-------------Fonctions ADC
+//----------------------------------------------------------------------------------
+
+uint16_t ADC_Lire(uint8_t canal){
+	uint16_t valeur[2];
+
+	xSemaphoreTake(mtx_adcHandle,portMAX_DELAY);
+	HAL_ADC_Start(&hadc1);
+	for (int i = 0; i < 2; i++) {
+		if(HAL_ADC_PollForConversion(&hadc1,10) == HAL_OK){
+			valeur[i] = (uint16_t)HAL_ADC_GetValue(&hadc1);
+		}
+	}
+	HAL_ADC_Stop(&hadc1);
+	xSemaphoreGive(mtx_adcHandle);
+	return valeur[canal];
+}
+
+uint16_t Lire_Luminosite(){
+	return ADC_Lire(LDR_ADC);
+}
+
+
+HAL_StatusTypeDef TC72_Transfer(uint8_t *tx, uint8_t *rx, uint16_t n){
+	HAL_GPIO_WritePin(CE_GPIO_Port, CE_Pin, GPIO_PIN_SET);      // CE actif à l'état haut
+	HAL_StatusTypeDef st = HAL_SPI_TransmitReceive(&hspi2, tx, rx, n, 10);
+	HAL_GPIO_WritePin(CE_GPIO_Port, CE_Pin, GPIO_PIN_RESET);
+	return st;
+}
+
+void TC72_Init(){
+	uint8_t tx[2] = {0x80, 0x04};      // écriture du registre de contrôle : conversion continue
+	uint8_t rx[2] = {0};
+	TC72_Transfer(tx, rx, 2);
+	vTaskDelay(pdMS_TO_TICKS(200));    // première conversion ≈ 150 ms
+
+	// Test de câblage : l'ID du fabricant vaut 0x54
+	uint8_t id_tx[2] = {0x03, 0x00};
+	TC72_Transfer(id_tx, rx, 2);
+	printf("TC72 ID = 0x%02X (attendu 0x54)\r\n", rx[1]);
+}
+
+float Lire_Temperature(){
+	static float derniere = 0.0f;       // conservée si la lecture échoue
+	uint8_t tx[4] = {0x02, 0, 0, 0};    // adresse MSB, puis 3 octets d'horloge
+	uint8_t rx[4] = {0};
+
+	if(TC72_Transfer(tx, rx, 4) != HAL_OK){
+		return derniere;
+	}
+
+	int8_t  msb = (int8_t)rx[1];        // partie entière signée
+	uint8_t lsb = rx[2];                // bit 7 = 0,5 °C, bit 6 = 0,25 °C
+
+	float t = (float)msb;
+	if(lsb & 0x80) t += 0.5f;
+	if(lsb & 0x40) t += 0.25f;
+
+	derniere = t;
+	return t;
+}
+
+uint16_t QA_Init(){
+	uint8_t cmd[8] = {0x26, 0x0F, 0x80, 0x00, 0xA2, 0x66, 0x66, 0x93};
+	uint8_t rx[3] = {0};
+	uint16_t v = 0;
+
+	xSemaphoreTake(mtx_i2cHandle,portMAX_DELAY);
+	if(HAL_I2C_Master_Transmit(&hi2c1, SGP40_ADDR, cmd, 8, 50) == HAL_OK){
+		xSemaphoreGive(mtx_i2cHandle);
+		vTaskDelay(pdMS_TO_TICKS(35));
+		xSemaphoreTake(mtx_i2cHandle,portMAX_DELAY);
+
+		if(HAL_I2C_Master_Receive(&hi2c1, SGP40_ADDR, rx, 3, 50) == HAL_OK){
+			v = (uint16_t)((rx[0] << 8) | rx[1] );
+		}
+	}
+	xSemaphoreGive(mtx_i2cHandle);
+	return v;
+}
+
+uint16_t Lire_QA(){
+	uint16_t raw = 0;
+
+	// On fait 10 mesures pour satbliliser la sortie
+	raw = QA_Init();
+	vTaskDelay(pdMS_TO_TICKS(10));
+	/*for (int i = 0; i < 10; ++i) {
+		raw = QA_Init();
+		vTaskDelay(pdMS_TO_TICKS(1000));
+	}*/
+	if(raw == 0){ // erreur lecture
+		return 0;
+	}
+
+	if(raw > sgp40_baseline){
+		sgp40_baseline = raw;
+	}
+	return sgp40_baseline - raw; // donc 0 = pur et val elevé = pollué
+}
+
+//----------------------------------------------------------------------------------
 //-------------Fonctions Ventilateur
 //----------------------------------------------------------------------------------
 
+
 void Vent_Marche(){
-	uint16_t pot = ADC_Lire(ADC_CHANNEL_11);
-	__HAL_TIM_SET_COMPARE(&htim2,TIM_CHANNEL_1,(uint32_t)pot * 3999 / 4095);
+	uint16_t pot = ADC_Lire(1);
+	//__HAL_TIM_SET_COMPARE(&htim2,TIM_CHANNEL_1,(uint32_t)pot * 3999 / 4095);
+	__HAL_TIM_SET_COMPARE(&htim2,TIM_CHANNEL_1,3999);
 	HAL_GPIO_WritePin(DIS_GPIO_Port, DIS_Pin, GPIO_PIN_RESET); // activation du moteur
 }
 
 void Vent_Arret(){
 	__HAL_TIM_SET_COMPARE(&htim2,TIM_CHANNEL_1,0);
 	HAL_GPIO_WritePin(DIS_GPIO_Port, DIS_Pin, GPIO_PIN_SET); // désactivation du moteur
+}
+
+void Act_ventilateur(bool rafraichir, bool balayer){
+	Actions action = {0};
+	action.ventilo_valide = true;
+	action.act_rafraichissement = rafraichir;
+	action.act_balayage = balayer;
+	xQueueSend(ActionsHandle, &action, pdMS_TO_TICKS(100));
 }
 
 //----------------------------------------------------------------------------------
@@ -674,7 +809,54 @@ Heure Set_alarme(Heure base,int delta){
 	return alarme;
 }
 
+//----------------------------------------------------------------------------------
+//-------------Fonctions Buzzer
+//----------------------------------------------------------------------------------
 
+void Buzzer_Note(uint16_t freq){
+	if(freq == 0){
+		__HAL_TIM_SET_COMPARE(&htim8,TIM_CHANNEL_4,0);
+	}
+	else{
+		uint32_t arr = 1000000/freq -1;
+		__HAL_TIM_SET_AUTORELOAD(&htim8,arr);
+		__HAL_TIM_SET_COMPARE(&htim8,TIM_CHANNEL_4,arr/2); // On mets le volume à 50 %
+	}
+}
+
+TickType_t Delai(TickType_t echeance, TickType_t now){
+	int d = echeance - now;
+	if(d > 0){
+		return (TickType_t)d;
+	}
+	return 0;
+}
+
+//----------------------------------------------------------------------------------
+//-------------Fonctions Leds
+//----------------------------------------------------------------------------------
+
+void Leds_Envoyer(uint8_t niveau){
+	uint32_t n = ((uint32_t)niveau * niveau) / 255;
+	uint32_t r = n;
+	uint32_t g = (n * 150) / 255;
+	uint32_t b = (n * 30) / 255;
+	uint32_t grb = (g << 16) | (r << 8) | b;
+
+	for (int i = 0; i < NB_LEDS; i++) {
+		for (int j = 0; j < 24; ++j) {
+			led_buffer[i*24 + j] = (grb & (1UL << (23 - j))) ? LED_T1 : LED_T0;
+		}
+	}
+
+	for (int i = 0; i < LED_RESET_SLOTS; ++i) {
+		led_buffer[LED_BITS + i] = 0;
+	}
+
+	HAL_TIM_PWM_Start_DMA(&htim3, TIM_CHANNEL_4, (uint32_t*)led_buffer, LED_BITS + LED_RESET_SLOTS);
+	xSemaphoreTake(sem_ledHandle, pdMS_TO_TICKS(20));
+	HAL_TIM_PWM_Stop_DMA(&htim3, TIM_CHANNEL_4);
+}
 
 /* USER CODE END 0 */
 
@@ -726,6 +908,11 @@ int main(void)
 	HAL_GPIO_WritePin(DIS_GPIO_Port, DIS_Pin, GPIO_PIN_SET);    // moteur désactivé au départ
 	// moteur désactivé au départ
 	HAL_UART_Receive_IT(&hlpuart1, (uint8_t *) &bluetoothChar, 1);
+
+	//seuils de base
+	consignes.seuil_temperature = 25;
+	consignes.seuil_qa = 100;
+	consignes.seuil_luminosite = 500;
 	/* USER CODE END 2 */
 
 	/* USER CODE BEGIN RTOS_MUTEX */
@@ -740,32 +927,23 @@ int main(void)
 	mtx_i2cHandle = xSemaphoreCreateMutex();
 	sem_alarmeHandle = xSemaphoreCreateBinary();
 	mtx_consignesHandle = xSemaphoreCreateMutex();
-	mtx_heureHandle = xSemaphoreCreateMutex();
 	HeureMutexSemaphHandle = xSemaphoreCreateMutex();
 	AlarmeMutexSemaphHandle = xSemaphoreCreateMutex();
+	mtx_infosHandle = xSemaphoreCreateMutex();
 	/* USER CODE END RTOS_SEMAPHORES */
+
+	/* USER CODE BEGIN RTOS_TIMERS */
+	/* start timers, add new ones, ... */
+	/* USER CODE END RTOS_TIMERS */
 
 	/* USER CODE BEGIN RTOS_QUEUES */
 	/* add queues, ... */
 	InfosHandle = xQueueCreate(1, sizeof(Infos) );
 	xQueueCommandes = xQueueCreate(10, sizeof(Commande));
 	AffHandle = xQueueCreate(4, sizeof(Affichages) );
-	ActionsHandle = xQueueCreate(4, sizeof( int) );
+	ActionsHandle = xQueueCreate(4, sizeof( Actions) );
 	/* USER CODE END RTOS_QUEUES */
 
-	/* USER CODE BEGIN RTOS_TIMERS */
-	/* start timers, add new ones, ... */
-	/* USER CODE END RTOS_TIMERS */
-
-	/* USER CODE BEGIN RTOS_THREADS */
-	xTaskCreate(task_gestion_alarme,       /* Function that implements the task. */
-			"TASK_GESTION_ALARME",          /* Text name for the task. */
-			1024,      /* Stack size in words, not bytes. */
-			NULL,    /* Parameter passed into the task. */
-			tskIDLE_PRIORITY+10,/* Priority at which the task is created. */
-			&xTaskGestionAlarme  );      /* Used to pass out the created task's handle. */
-	/* add threads, ... */
-	/* USER CODE END RTOS_THREADS */
 
 	/* USER CODE BEGIN RTOS_THREADS */
 	osThreadDef(defaultTask, StartDefaultTask, osPriorityNormal, 0, 128);
@@ -777,13 +955,12 @@ int main(void)
 			NULL,    /* Parameter passed into the task. */
 			tskIDLE_PRIORITY+11,/* Priority at which the task is created. */
 			&xTaskGestionHorloge );      /* Used to pass out the created task's handle. */
-
-	//	xTaskCreate(task_interface_actions,       /* Function that implements the task. */
-	//			"TASK_INTERFACE_ACTIONS",          /* Text name for the task. */
-	//			1024,      /* Stack size in words, not bytes. */
-	//			NULL,    /* Parameter passed into the task. */
-	//			tskIDLE_PRIORITY+6,/* Priority at which the task is created. */
-	//			&xTaskInterfaceActions  );      /* Used to pass out the created task's handle. */
+	xTaskCreate(task_interface_actions,       /* Function that implements the task. */
+			"TASK_INTERFACE_ACTIONS",          /* Text name for the task. */
+			1024,      /* Stack size in words, not bytes. */
+			NULL,    /* Parameter passed into the task. */
+			tskIDLE_PRIORITY+6,/* Priority at which the task is created. */
+			&xTaskInterfaceActions  );      /* Used to pass out the created task's handle. */
 
 	xTaskCreate(task_interface_aff,       /* Function that implements the task. */
 			"TASK_INTERFACE_AFF",          /* Text name for the task. */
@@ -805,7 +982,7 @@ int main(void)
 			"TofTask",          /* Text name for the task. */
 			1024,      /* Stack size in words, not bytes. */
 			NULL,    /* Parameter passed into the task. */
-			tskIDLE_PRIORITY+5,/* Priority at which the task is created. */
+			tskIDLE_PRIORITY+10,/* Priority at which the task is created. */
 			NULL );      /* Used to pass out the created task's handle. */
 
 	xTaskCreate(GestionCommandTask,       /* Function that implements the task. */
@@ -814,6 +991,31 @@ int main(void)
 			NULL,    /* Parameter passed into the task. */
 			tskIDLE_PRIORITY+9,/* Priority at which the task is created. */
 			NULL );      /* Used to pass out the created task's handle. */
+	xTaskCreate(task_gestion_alarme,       /* Function that implements the task. */
+			"alarmes",          /* Text name for the task. */
+			1024,      /* Stack size in words, not bytes. */
+			NULL,    /* Parameter passed into the task. */
+			tskIDLE_PRIORITY+4,/* Priority at which the task is created. */
+			NULL );      /* Used to pass out the created task's handle. */
+	xTaskCreate(task_gestion_ventilateur,       /* Function that implements the task. */
+			"ventilateur",          /* Text name for the task. */
+			1024,      /* Stack size in words, not bytes. */
+			NULL,    /* Parameter passed into the task. */
+			tskIDLE_PRIORITY+2,/* Priority at which the task is created. */
+			NULL );      /* Used to pass out the created task's handle. */
+	xTaskCreate(task_acq_luminosite,       /* Function that implements the task. */
+			"luminosite",          /* Text name for the task. */
+			1024,      /* Stack size in words, not bytes. */
+			NULL,    /* Parameter passed into the task. */
+			tskIDLE_PRIORITY+2,/* Priority at which the task is created. */
+			NULL );      /* Used to pass out the created task's handle. */
+	xTaskCreate(task_acq_temp_qa,       /* Function that implements the task. */
+			"luminosite",          /* Text name for the task. */
+			1024,      /* Stack size in words, not bytes. */
+			NULL,    /* Parameter passed into the task. */
+			tskIDLE_PRIORITY+2,/* Priority at which the task is created. */
+			NULL );      /* Used to pass out the created task's handle. */
+
 	/* USER CODE END RTOS_THREADS */
 
 	/* Start scheduler */
@@ -900,18 +1102,17 @@ static void MX_ADC1_Init(void)
 
 	/* USER CODE END ADC1_Init 1 */
 
-
 	/** Common config
 	 */
 	hadc1.Instance = ADC1;
 	hadc1.Init.ClockPrescaler = ADC_CLOCK_ASYNC_DIV1;
 	hadc1.Init.Resolution = ADC_RESOLUTION_12B;
 	hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
-	hadc1.Init.ScanConvMode = ADC_SCAN_ENABLE;
-	hadc1.Init.EOCSelection = ADC_EOC_SEQ_CONV;
+	hadc1.Init.ScanConvMode = ADC_SCAN_DISABLE;
+	hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
 	hadc1.Init.LowPowerAutoWait = DISABLE;
 	hadc1.Init.ContinuousConvMode = DISABLE;
-	hadc1.Init.NbrOfConversion = 2;
+	hadc1.Init.NbrOfConversion = 1;
 	hadc1.Init.DiscontinuousConvMode = DISABLE;
 	hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
 	hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
@@ -935,19 +1136,10 @@ static void MX_ADC1_Init(void)
 	 */
 	sConfig.Channel = ADC_CHANNEL_13;
 	sConfig.Rank = ADC_REGULAR_RANK_1;
-	sConfig.SamplingTime = ADC_SAMPLETIME_47CYCLES_5;
+	sConfig.SamplingTime = ADC_SAMPLETIME_2CYCLES_5;
 	sConfig.SingleDiff = ADC_SINGLE_ENDED;
 	sConfig.OffsetNumber = ADC_OFFSET_NONE;
 	sConfig.Offset = 0;
-	if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
-	{
-		Error_Handler();
-	}
-
-	/** Configure Regular Channel
-	 */
-	sConfig.Channel = ADC_CHANNEL_11;
-	sConfig.Rank = ADC_REGULAR_RANK_2;
 	if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
 	{
 		Error_Handler();
@@ -1225,7 +1417,7 @@ static void MX_TIM3_Init(void)
 	htim3.Instance = TIM3;
 	htim3.Init.Prescaler = 0;
 	htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-	htim3.Init.Period = 99-1;
+	htim3.Init.Period = 99;
 	htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
 	htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
 	if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
@@ -1286,7 +1478,7 @@ static void MX_TIM5_Init(void)
 	htim5.Init.Period = 4294967295;
 	htim5.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
 	htim5.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-	sConfig.EncoderMode = TIM_ENCODERMODE_TI12;
+	sConfig.EncoderMode = TIM_ENCODERMODE_TI1;
 	sConfig.IC1Polarity = TIM_ICPOLARITY_RISING;
 	sConfig.IC1Selection = TIM_ICSELECTION_DIRECTTI;
 	sConfig.IC1Prescaler = TIM_ICPSC_DIV1;
@@ -1392,12 +1584,10 @@ static void MX_TIM8_Init(void)
 }
 
 /**
-
  * Enable DMA controller clock
  */
 static void MX_DMA_Init(void)
 {
-
 
 	/* DMA controller clock enable */
 	__HAL_RCC_DMA1_CLK_ENABLE();
@@ -1410,12 +1600,10 @@ static void MX_DMA_Init(void)
 }
 
 /**
-<<<<<<< HEAD
  * @brief GPIO Initialization Function
  * @param None
  * @retval None
  */
-
 static void MX_GPIO_Init(void)
 {
 	GPIO_InitTypeDef GPIO_InitStruct = {0};
@@ -1436,7 +1624,7 @@ static void MX_GPIO_Init(void)
 	HAL_GPIO_WritePin(DIR_GPIO_Port, DIR_Pin, GPIO_PIN_RESET);
 
 	/*Configure GPIO pin Output Level */
-	HAL_GPIO_WritePin(DIS_GPIO_Port, DIS_Pin, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(GPIOB, DIS_Pin|CE_Pin, GPIO_PIN_RESET);
 
 	/*Configure GPIO pin : B1_Pin */
 	GPIO_InitStruct.Pin = B1_Pin;
@@ -1476,12 +1664,12 @@ static void MX_GPIO_Init(void)
 	GPIO_InitStruct.Pull = GPIO_NOPULL;
 	HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-	/*Configure GPIO pin : DIS_Pin */
-	GPIO_InitStruct.Pin = DIS_Pin;
+	/*Configure GPIO pins : DIS_Pin CE_Pin */
+	GPIO_InitStruct.Pin = DIS_Pin|CE_Pin;
 	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
 	GPIO_InitStruct.Pull = GPIO_NOPULL;
 	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-	HAL_GPIO_Init(DIS_GPIO_Port, &GPIO_InitStruct);
+	HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
 	/* EXTI interrupt init*/
 	HAL_NVIC_SetPriority(EXTI15_10_IRQn, 5, 0);
@@ -1494,51 +1682,20 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-void Heure_Incrementer(Heure *h){
-	h->sec++;
-	if(h->sec >= 60){
-		h->sec = 0;
-		h->min++;
-	}
-	if(h->min >= 60){
-		h->min = 0;
-		h->h++;
-	}
-	if(h->h >= 24){
-		h->h++;
-	}
-}
-
-bool Heure_Egales(Heure a, Heure b){
-	if( (a.h == b.h) && (a.min == b.min) && (a.sec == b.sec)){
-		return true;
-	}
-	return false;
-}
-
-void Aff_ecran(Heure h, uint16_t sel, uint16_t valeur, bool retro){
-	Affichages aff;
-	aff.ecran_heure = h;
-	aff.ecran_sel = sel;
-	aff.ecran_valide = true;
-	aff.ecran_retro = retro;
-	aff.ecran_valeur = valeur;
-	xQueueSend(AffHandle, &aff, pdMS_TO_TICKS(10));   // si pleine, la MAJ de la seconde suivante rattrapera
-}
 
 void task_gestion_horloge(void *pvParameters){
 	TickType_t dernier = xTaskGetTickCount();
-	Infos infos;
+	Infos infos = {0} ;
 
 	while(1){
 		vTaskDelayUntil(&dernier, pdMS_TO_TICKS(PERIODE_HORLOGE));
 
 		// Incrementation heure
 		Heure h;
-		xSemaphoreTake(mtx_heureHandle, portMAX_DELAY);
+		xSemaphoreTake(HeureMutexSemaphHandle, portMAX_DELAY);
 		Heure_Incrementer(&heure);
 		h = heure; // Copie locale pour la comparaison avec l'alarme
-		xSemaphoreGive(mtx_heureHandle);
+		xSemaphoreGive(HeureMutexSemaphHandle);
 
 		bool mesure_ok = (xQueuePeek(InfosHandle, &infos, 0) == pdPASS); // dernières mesures (Peek, comme pour le ventilateur)
 
@@ -1561,11 +1718,12 @@ void task_gestion_horloge(void *pvParameters){
 			xSemaphoreGive(sem_alarmeHandle); // reveil de la task de gestion d'alarme
 		}
 		// Selection affichage
-		uint8_t valeur =0;
+		uint8_t valeur = 0;
 		switch(sel){
-		case 1: valeur = infos.temperature;
-		case 2: valeur = infos.qualite_air;
-		case 3: valeur = infos.qualite_sommeil;
+		case 1: valeur = infos.temperature; break;
+		case 2: valeur = infos.qualite_air; break;
+		case 3: valeur = infos.qualite_sommeil; break;
+		default: break;
 		}
 		// Actualisation ecran
 		Aff_ecran(h, sel, valeur, retro);
@@ -1802,102 +1960,6 @@ void TofTask(void *argument)
 }
 
 //----------------------------------------------------------------------------------
-//-------------Tache pour la gestion du buzzer et du ventilateur
-//----------------------------------------------------------------------------------
-/*
-void task_interface_actions(void *pvParameters)
-{
-	Actions action;
-	bool sonne = false, balaye = false;
-	uint8_t mel, idx;
-	uint8_t sens = 1;
-	TickType_t t_note, t_bal, t_inversion;
-
-	while(1){
-		// Attente prochaine action
-		TickType_t now = xTaskGetTickCount();
-		TickType_t wait = portMAX_DELAY;
-
-		if(sonne){
-			wait = Delai(t_note,now);
-		}
-
-		if(balaye){
-			TickType_t d = Delai(t_bal,now);
-			if(d < wait){
-				wait = d;
-			}
-		}
-		// Reception ordre
-
-		if(action.ventilo_valide){
-			if (action.act_rafraichissement || action.act_balayage){
-				Vent_Marche();
-				balaye = action.act_balayage;
-				if(balaye){
-					__HAL_TIM_SET_COUNTER(&htim5,0);
-					sens =1;
-					HAL_GPIO_WritePin(DIR_GPIO_Port, DIR_Pin, GPIO_PIN_RESET);
-					t_bal = t_inversion = xTaskGetTickCount();
-				}
-			}
-			else{
-				balaye = false;
-				Vent_Arret();
-			}
-		}
-
-		if(action.alarme_valide){
-			if(action.act_alarme && !sonne){
-				xSemaphoreTake(mtx_consignesHandle,portMAX_DELAY);
-				if(consignes.sel_melodie < NB_MELODIES){
-					mel = consignes.sel_melodie;
-				}
-				else{
-					mel = 0;
-				}
-				xSemaphoreGive(mtx_consignesHandle);
-				idx = 0;
-				sonne = true;
-				HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_4);
-				t_note = xTaskGetTickCount();
-			}
-			else if(!action.act_alarme){
-				sonne = false;
-				HAL_TIM_PWM_Stop(&htim8, TIM_CHANNEL_4);
-			}
-		}
-		// Action
-		now = xTaskGetTickCount();
-
-		if(sonne && (now - t_note) >= 0){
-			const Note* n= &melodies[mel].notes[idx];
-			Buzzer_Note(n->feq);
-			t_note = now + pdMS_TO_TICKS(n->duree);
-			idx = (idx +1) % melodies[mel].nb;
-		}
-
-		if(balaye && (now - t_note) >= 0){
-			int pos = __HAL_TIM_GET_COUNTER(&htim5);
-			bool inverser = (sens > 0 && pos >= BALAYAGE_BORNE) ||
-					(sens < 0 && pos <= BALAYAGE_BORNE) ||
-					((now - t_inversion) > pdMS_TO_TICKS(BALAYAGE_MAX));
-
-			if(inverser){
-				sens = -sens;
-				HAL_GPIO_WritePin(DIR_GPIO_Port, DIR_Pin, (sens > 0) ? GPIO_PIN_RESET : GPIO_PIN_SET);
-				t_inversion = now;
-			}
-			Vent_Marche();
-			t_bal = now + pdMS_TO_TICKS(PERIODE_VENT_MS);
-		}
-
-		vTaskDelay(pdMS_TO_TICKS(20));
-	}
-}
- */
-
-//----------------------------------------------------------------------------------
 //-------------tache interface de l'écran Oled
 //----------------------------------------------------------------------------------
 
@@ -1919,6 +1981,11 @@ void task_interface_aff(void *pvParameters){
 		}
 	}
 }
+
+//----------------------------------------------------------------------------------
+//-------------Tache pour la gestion de l'alarme
+//----------------------------------------------------------------------------------
+
 
 void task_gestion_alarme(void *pvParameters){
 	Heure alarme_base;
@@ -1985,24 +2052,206 @@ void task_gestion_alarme(void *pvParameters){
 }
 
 //----------------------------------------------------------------------------------
+//-------------Tache pour la gestion du buzzer et du ventilateur
+//----------------------------------------------------------------------------------
+
+void task_interface_actions(void *pvParameters){
+	Actions action;
+	bool sonne = false, balaye = false;
+	uint8_t mel, idx;
+	int8_t sens = 1;
+	TickType_t t_note, t_bal, t_inversion;
+	while(1){
+		// Attente prochaine action
+		TickType_t now = xTaskGetTickCount();
+		TickType_t wait = portMAX_DELAY;
+
+		if(sonne){
+			wait = Delai(t_note,now);
+		}
+
+		if(balaye){
+			TickType_t d = Delai(t_bal,now);
+			if(d < wait){
+				wait = d;
+			}
+		}
+		if(xQueueReceive(ActionsHandle, &action, wait) == pdPASS){
+			// Reception ordre
+			if(action.ventilo_valide){
+				if (action.act_rafraichissement || action.act_balayage){
+					Vent_Marche();
+					balaye = action.act_balayage;
+					if(balaye){
+						__HAL_TIM_SET_COUNTER(&htim5,0);
+						sens = 1;
+						HAL_GPIO_WritePin(DIR_GPIO_Port, DIR_Pin, GPIO_PIN_RESET);
+						t_bal = t_inversion = xTaskGetTickCount();
+					}
+				}
+				else{
+					balaye = false;
+					Vent_Arret();
+				}
+			}
+
+			if(action.alarme_valide){
+				if(action.act_alarme && !sonne){
+					xSemaphoreTake(mtx_consignesHandle,portMAX_DELAY);
+					if(consignes.sel_melodie < NB_MELODIES){
+						mel = consignes.sel_melodie;
+					}
+					else{
+						mel = 0;
+					}
+					xSemaphoreGive(mtx_consignesHandle);
+					idx = 0;
+					sonne = true;
+					HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_4);
+					t_note = xTaskGetTickCount();
+				}
+				else if(!action.act_alarme){
+					sonne = false;
+					HAL_TIM_PWM_Stop(&htim8, TIM_CHANNEL_4);
+				}
+			}
+		}
+		// Action
+		now = xTaskGetTickCount();
+
+		if(sonne && (int32_t)(now - t_note) >= 0){
+			const Note* n= &melodies[mel].notes[idx];
+			Buzzer_Note(n->feq);
+			t_note = now + pdMS_TO_TICKS(n->duree);
+			idx = (idx +1) % melodies[mel].nb;
+		}
+
+		if(balaye && (int32_t)(now - t_note) >= 0){
+			int pos = (int32_t)__HAL_TIM_GET_COUNTER(&htim5);
+			bool inverser = (sens > 0 && pos >= BALAYAGE_BORNE) ||
+					(sens < 0 && pos <= BALAYAGE_BORNE) ||
+					((now - t_inversion) > pdMS_TO_TICKS(BALAYAGE_MAX));
+
+			if(inverser){
+				sens = -sens;
+				HAL_GPIO_WritePin(DIR_GPIO_Port, DIR_Pin, (sens > 0) ? GPIO_PIN_RESET : GPIO_PIN_SET);
+				t_inversion = now;
+			}
+			Vent_Marche();
+			t_bal = now + pdMS_TO_TICKS(PERIODE_VENT_MS);
+		}
+
+	}
+}
+
+//----------------------------------------------------------------------------------
+//-------------Tache pour la gestion du ventilateur
+//----------------------------------------------------------------------------------
+
+
+void task_gestion_ventilateur(void *pvParameters){
+	Infos info = {0};
+	float    seuil_temp;
+	uint16_t seuil_qa;
+	bool dernier_rafraichir = false, dernier_aerer = false;
+	bool premier = true;                      // force le premier envoi
+
+	while(1){
+		bool mesure_ok = (xQueuePeek(InfosHandle, &info, 0) == pdPASS);
+
+		if(mesure_ok){
+			xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
+			seuil_temp = consignes.seuil_temperature;
+			seuil_qa   = consignes.seuil_qa;
+			xSemaphoreGive(mtx_consignesHandle);
+
+			bool rafraichir = (info.temperature > seuil_temp);
+			bool aerer      = (info.qualite_air > seuil_qa);
+
+			if(premier || rafraichir != dernier_rafraichir || aerer != dernier_aerer){
+				premier = false;
+				dernier_rafraichir = rafraichir;
+				dernier_aerer = aerer;
+				printf("VENT: rafraichir=%d aerer=%d\r\n", rafraichir, aerer);
+				Act_ventilateur(rafraichir, aerer);
+			}
+		}
+		vTaskDelay(pdMS_TO_TICKS(PERIODE_VENT_MS));
+	}
+}
+
+//----------------------------------------------------------------------------------
+//-------------Tache pour l'acquisition lumi et température et QA
+//----------------------------------------------------------------------------------
+
+void task_acq_luminosite(void *pvParameters){
+	TickType_t  dernier = xTaskGetTickCount();
+
+	while(1){
+		uint16_t lumi = Lire_Luminosite();
+
+		xSemaphoreTake(mtx_infosHandle,portMAX_DELAY);
+		infos_acq.luminosite = lumi;
+		xQueueOverwrite(InfosHandle,&infos_acq);
+		xSemaphoreGive(mtx_infosHandle);
+
+		vTaskDelayUntil(&dernier, pdMS_TO_TICKS(PERIODE_ACQ_MS));
+	}
+}
+
+void task_acq_temp_qa(void *pvParameters){
+	TickType_t  dernier = xTaskGetTickCount();
+	TC72_Init();
+
+	while(1)
+	{
+		float temp = Lire_Temperature();
+		uint16_t qa = Lire_QA();
+
+		xSemaphoreTake(mtx_infosHandle,portMAX_DELAY);
+		infos_acq.temperature = temp;
+		infos_acq.qualite_air = qa;
+		xQueueOverwrite(InfosHandle,&infos_acq);
+		xSemaphoreGive(mtx_infosHandle);
+
+		vTaskDelayUntil(&dernier, pdMS_TO_TICKS(PERIODE_ACQ_MS));
+	}
+}
+
+//----------------------------------------------------------------------------------
 //-------------Callback
 //----------------------------------------------------------------------------------
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
-	Commande cmd;
+	Commande cmd = {0};
 	BaseType_t woken = pdFALSE; //sert à reveiller la tache gestion de commande
+
+	static TickType_t dernierSW1 = 0;
+	static TickType_t dernierSW2 = 0;
+	static TickType_t dernierB1 = 0;
+	TickType_t now = xTaskGetTickCountFromISR();
+
 
 	if(GPIO_Pin == SW1_Pin)
 	{
+		if ((now - dernierSW1) < pdMS_TO_TICKS(50))
+			return;
+		dernierSW1 = now;
 		cmd.type = CMD_SET_AFFICHAGE;
 	}
 	else if(GPIO_Pin == SW2_Pin)
 	{
+		if ((now - dernierSW2) < pdMS_TO_TICKS(50))
+			return;
+		dernierSW2 = now;
 		cmd.type = CMD_SET_MELODIE;
 	}
 	else if(GPIO_Pin == B1_Pin)
 	{
+		if ((now - dernierB1) < pdMS_TO_TICKS(50))
+			return;
+		dernierB1 = now;
 		cmd.type = CMD_SET_CREPUSCULE;
 	}
 
@@ -2044,17 +2293,17 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 	}
 }
 
-
-
 // Buzzer
-void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
-{
+void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim){
 	if(htim->Instance == TIM3){
 		BaseType_t woken = pdFALSE;
 		xSemaphoreGiveFromISR(sem_ledHandle,&woken);
 		portYIELD_FROM_ISR(woken);
 	}
 }
+
+
+
 
 /* USER CODE END 4 */
 

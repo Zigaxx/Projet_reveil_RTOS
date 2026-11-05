@@ -104,6 +104,8 @@ void Error_Handler(void);
 #define SWO_GPIO_Port GPIOB
 #define DIS_Pin GPIO_PIN_5
 #define DIS_GPIO_Port GPIOB
+#define CE_Pin GPIO_PIN_8
+#define CE_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
 
