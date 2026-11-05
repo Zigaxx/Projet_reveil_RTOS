@@ -15,8 +15,14 @@
 #include <stdbool.h>
 
 #include "ssd1306.h"
+#include "ssd1306_fonts.h"
 
 #include "app_types.h"
+// --- Peripheriques ----
+extern ADC_HandleTypeDef hadc1;
+extern I2C_HandleTypeDef hi2c1;
+extern SPI_HandleTypeDef hspi2;
+extern TIM_HandleTypeDef htim2, htim3, htim5, htim8;
 
 // ---- Donnes partagees -----
 extern Consignes consignes;
@@ -24,6 +30,16 @@ extern Heure     heure;
 extern Infos     infos_acq;
 
 // ---- Objets freertos -----
+extern xTaskHandle xTaskAcqLumi;
+extern xTaskHandle xTaskAcqTempQA;
+extern xTaskHandle xTaskAcqTof;
+extern xTaskHandle xTaskInterfaceActions;
+extern xTaskHandle xTaskInterfaceAff;
+extern xTaskHandle xTaskGestionHorloge;
+extern xTaskHandle xTaskGestionAffCrepAube;
+extern xTaskHandle xTaskGestionAlarme;
+extern xTaskHandle xTaskGestionVentilateur;
+
 extern xSemaphoreHandle mtx_consignesHandle, mtx_infosHandle, mtx_adcHandle;
 extern xSemaphoreHandle mtx_i2cHandle, mtx_heureHandle;
 extern xSemaphoreHandle sem_alarmeHandle, sem_refreshHandle, sem_ledHandle;
@@ -70,9 +86,14 @@ void       Vent_Arret();
 void  Heure_Incrementer(Heure *h);
 bool  Heure_Egales(Heure a, Heure b);
 void  Aff_ecran(Heure h, uint16_t sel, uint16_t valeur, bool retro);
+bool Crep_active();
 void  aff_led(uint8_t niveau);
+bool Alarme_active();
 void  Act_alarme(bool on);
 Heure Set_alarme(Heure base, int delta);
 void  Act_ventilateur(bool rafraichir, bool balayer);
+
+
+
 
 #endif /* INC_APP_RTOS_H_ */

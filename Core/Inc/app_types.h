@@ -31,6 +31,8 @@
 #define BALAYAGE_PAS        50
 #define BALAYAGE_MAX        5000
 
+#define NB_MELODIES  (sizeof(melodies)/sizeof(melodies[0]))
+
 // ----- TYPEDEF -----
 typedef struct { uint16_t h, min, sec; } Heure;
 
