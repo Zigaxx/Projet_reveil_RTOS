@@ -55,7 +55,9 @@
 #define BALAYAGE_BORNE 500        // en pas d'encodeur, à calibrer
 #define BALAYAGE_PAS 50
 #define BALAYAGE_MAX 5000       // sécurité si l'encodeur ne répond pas
-#define PERIODE_HORLOGE  1000
+#define PERIODE_HORLOGE  1000#define DUREE_AUBE 30000
+#define DUREE_CREP 30000
+#define PERIODE_MAJ_LED 100
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -255,6 +257,20 @@ void Heure_Incrementer(Heure *h);
 bool Heure_Egales(Heure a, Heure b);
 void Aff_ecran(Heure h, uint16_t sel, uint16_t valeur, bool retro);
 
+
+
+
+// DECLARATION TACHES
+xTaskHandle xTaskGestionAffCrepAube;
+
+void task_gestion_aff_crep_aube(void *pvParameters);
+// DECLARATION SEMAPHORES
+xSemaphoreHandle mtx_consignesHandle;
+// MAILBOXES
+QueueHandle_t AffHandle;
+
+// FONCTIONS
+void aff_led(uint8_t niveau);
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -346,7 +362,6 @@ int main(void)
   mtx_consignesHandle = xSemaphoreCreateMutex();
   mtx_i2cHandle = xSemaphoreCreateMutex();
   sem_alarmeHandle = xSemaphoreCreateBinary();
-  mtx_consignesHandle = xSemaphoreCreateMutex();
   mtx_heureHandle = xSemaphoreCreateMutex();
   /* USER CODE END RTOS_SEMAPHORES */
 
@@ -357,6 +372,7 @@ int main(void)
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
   InfosHandle = xQueueCreate(1, sizeof(Infos) );
+  AffHandle = xQueueCreate(4, sizeof(Affichages) );
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
@@ -405,6 +421,13 @@ int main(void)
   			NULL,    /* Parameter passed into the task. */
   			tskIDLE_PRIORITY+11,/* Priority at which the task is created. */
   			&xTaskGestionHorloge );      /* Used to pass out the created task's handle. */
+
+  xTaskCreate(task_gestion_aff_crep_aube,       /* Function that implements the task. */
+			"TASK_GESTION_AFF_CREP_AUBE",          /* Text name for the task. */
+			1024,      /* Stack size in words, not bytes. */
+			NULL,    /* Parameter passed into the task. */
+			tskIDLE_PRIORITY+8,/* Priority at which the task is created. */
+			&xTaskGestionAffCrepAube );      /* Used to pass out the created task's handle. */
 
   /* add threads, ... */
   /* USER CODE END RTOS_THREADS */
@@ -1491,6 +1514,64 @@ void task_gestion_horloge(void *pvParameters){
 		Aff_ecran(h, sel, valeur, retro);
 	}
 }
+void aff_led(uint8_t niveau){
+	Affichages aff;
+	aff.led_valide = true;
+	aff.led_niveau = niveau;
+	xQueueSend(AffHandle, &aff, pdMS_TO_TICKS(100));
+}
+
+// Déclaration des fonctions
+
+static bool Alarme_active(){
+	xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
+	bool r = consignes.activer_alarme;
+	xSemaphoreGive(mtx_consignesHandle);
+	return r;
+}
+
+static bool Crep_active(){
+	xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
+	bool r = consignes.activer_crepuscule;
+	xSemaphoreGive(mtx_consignesHandle);
+	return r;
+}
+
+void task_gestion_aff_crep_aube(void *pvParameters){
+
+	while(1){
+		if(Alarme_active()){
+			uint32_t t = 0;
+
+			while(Alarme_active()){
+				if(t > DUREE_AUBE){
+					t = DUREE_AUBE;
+				}
+				aff_led((uint8_t)((t * 255) / DUREE_AUBE));
+				vTaskDelay(pdMS_TO_TICKS(PERIODE_MAJ_LED));
+				t += PERIODE_MAJ_LED;
+			}
+			aff_led(0);
+		}
+		else if(Crep_active()){
+			uint32_t t = 0;
+
+			while(t <= DUREE_CREP && Crep_active() && !Alarme_active()){
+				aff_led((uint8_t)(255 - (t * 255) / DUREE_CREP));
+				vTaskDelay(pdMS_TO_TICKS(PERIODE_MAJ_LED));
+				t += PERIODE_MAJ_LED;
+			}
+			aff_led(0);
+			xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
+			consignes.activer_crepuscule = false;
+			xSemaphoreGive(mtx_consignesHandle);
+		}
+		else{
+			vTaskDelay(pdMS_TO_TICKS(PERIODE_MAJ_LED)); // Contuniation de la mélodie
+		}
+	}
+}
+
 
 /* USER CODE END 4 */
 
