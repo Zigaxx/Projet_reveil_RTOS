@@ -1,7 +1,7 @@
 #include "app_rtos.h"
 
 void Act_ventilateur(bool rafraichir, bool balayer){
-	Actions action;
+	Actions action = {0};
 	action.ventilo_valide = true;
 	action.act_rafraichissement = rafraichir;
 	action.act_balayage = balayer;
@@ -27,7 +27,7 @@ void task_gestion_ventilateur(void *pvParameters){
 		xSemaphoreGive(mtx_consignesHandle);
 
 		bool rafraichir = manuel || (info.temperature > seuil_temp);
-		bool aerer = info.qualite_air < seuil_qa;
+		bool aerer = info.qualite_air > seuil_qa;
 		Act_ventilateur(rafraichir,aerer);
 	}
 }

@@ -44,6 +44,7 @@ void task_gestion_horloge(void *pvParameters){
 		xSemaphoreTake(mtx_heureHandle, portMAX_DELAY);
 		Heure_Incrementer(&heure);
 		h = heure; // Copie locale pour la comparaison avec l'alarme
+		printf("tick %02u:%02u:%02u\r\n", h.h, h.min, h.sec);
 		xSemaphoreGive(mtx_heureHandle);
 
 		bool mesure_ok = (xQueuePeek(InfosHandle, &infos, 0) == pdPASS); // dernières mesures (Peek, comme pour le ventilateur)
@@ -57,7 +58,7 @@ void task_gestion_horloge(void *pvParameters){
 
 		// Retroeclairage
 		if(mesure_ok){
-			consignes.activer_retroeclairage = (infos.luminosite < consignes.seuil_luminosite);
+			consignes.activer_retroeclairage = (infos.luminosite > consignes.seuil_luminosite);
 		}
 		bool retro = consignes.activer_retroeclairage;
 		uint8_t sel = consignes.sel_affichage;
@@ -67,11 +68,20 @@ void task_gestion_horloge(void *pvParameters){
 			xSemaphoreGive(sem_alarmeHandle); // reveil de la task de gestion d'alarme
 		}
 		// Selection affichage
-		uint8_t valeur =0;
+		uint16_t valeur =0;
 		switch(sel){
-			case 1: valeur = infos.temperature;
-			case 2: valeur = infos.qualite_air;
-			case 3: valeur = infos.qualite_sommeil;
+			case 1:
+				valeur = infos.temperature;
+				break;
+			case 2:
+				valeur = infos.qualite_air;
+				break;
+			case 3:
+				valeur = infos.qualite_sommeil;
+				break;
+			default:
+				valeur = 0 ;
+				break;
 		}
 		// Actualisation ecran
 		Aff_ecran(h, sel, valeur, retro);

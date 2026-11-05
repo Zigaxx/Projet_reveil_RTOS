@@ -18,6 +18,37 @@
 #include "ssd1306_fonts.h"
 
 #include "app_types.h"
+
+// ----- DEFINE -----
+#define PERIODE_ACQ_MS      (1000)
+#define PERIODE_VENT_MS     (1000)      // 5000 pour tester
+#define PERIODE_HORLOGE     1000
+#define PERIODE_MAJ_LED     100
+#define DUREE_AUBE          3000
+#define DUREE_CREP          3000
+#define SNOOZE_MIN          10
+#define NB_TOF              4
+#define LDR_ADC             0                // rang dans le scan ADC
+#define POT_ADC             1
+#define SGP40_ADDR          (0x59 << 1)
+
+#define NB_LEDS             4
+#define LED_BITS            (NB_LEDS*24)
+#define LED_RESET_SLOTS     48
+#define LED_T0              32
+#define LED_T1              64
+
+#define BALAYAGE_BORNE      500
+#define BALAYAGE_PAS        50
+#define BALAYAGE_MAX        5000
+
+#define NB_MELODIES  (sizeof(melodies)/sizeof(melodies[0]))
+
+#define TC72_REG_CONTROL      0x00
+#define TC72_REG_TEMP_MSB     0x01
+#define TC72_REG_TEMP_LSB     0x02
+#define TC72_REG_CONTROL_ID   0x03
+
 // --- Peripheriques ----
 extern ADC_HandleTypeDef hadc1;
 extern I2C_HandleTypeDef hi2c1;
@@ -28,7 +59,6 @@ extern TIM_HandleTypeDef htim2, htim3, htim5, htim8;
 extern Consignes consignes;
 extern Heure     heure;
 extern Infos     infos_acq;
-
 // ---- Objets freertos -----
 extern xTaskHandle xTaskAcqLumi;
 extern xTaskHandle xTaskAcqTempQA;
@@ -64,8 +94,11 @@ void task_gestion_ventilateur(void *pvParameters);
 uint16_t ADC_Lire(uint32_t canal);
 uint16_t Lire_Luminosite();
 
-void     Temp_Init();
-uint16_t Lire_Temperature();
+void TC72_Init(SPI_HandleTypeDef *hspi, GPIO_TypeDef *CS_Port, uint16_t CS_Pin);
+void TC72_WriteRegister(uint8_t reg, uint8_t data);
+uint8_t TC72_ReadRegister(uint8_t reg);
+float TC72_ReadTemperature(void);
+float Lire_Temperature();
 
 uint16_t QA_Init();
 uint16_t Lire_QA();

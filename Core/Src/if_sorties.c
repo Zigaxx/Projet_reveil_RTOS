@@ -31,12 +31,12 @@ void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim){
 
 void Buzzer_Note(uint16_t freq){
 	if(freq == 0){
-		__HAL_TIM_SET_COMPARE(&htim2,TIM_CHANNEL_1,0);
+		__HAL_TIM_SET_COMPARE(&htim8,TIM_CHANNEL_4,0);
 	}
 	else{
 		uint32_t arr = 1000000/freq -1;
 		__HAL_TIM_SET_AUTORELOAD(&htim8,arr);
-		__HAL_TIM_SET_COMPARE(&htim2,TIM_CHANNEL_1,arr/2); // On mets le volume à 50 %
+		__HAL_TIM_SET_COMPARE(&htim8,TIM_CHANNEL_4,arr/2); // On mets le volume à 50 %
 	}
 }
 
@@ -81,7 +81,7 @@ void Ecran_Afficher(const Affichages *a){
 
 	switch (a->ecran_sel) {
 		case 1:
-			snprintf(l2, sizeof(l2), "Temp: %u C", (unsigned)a->ecran_valeur);
+			snprintf(l2, sizeof(l2), "Temp: %f C", (unsigned)a->ecran_valeur);
 			break;
 		case 2:
 			snprintf(l2, sizeof(l2), "QA: %u ppm", (unsigned)a->ecran_valeur);
@@ -122,7 +122,7 @@ void task_interface_actions(void *pvParameters){
 	Actions action;
 	bool sonne = false, balaye = false;
 	uint8_t mel, idx;
-	uint8_t sens = 1;
+	int8_t sens = 1;
 	TickType_t t_note, t_bal, t_inversion;
 	while(1){
 		// Attente prochaine action
@@ -139,56 +139,58 @@ void task_interface_actions(void *pvParameters){
 				wait = d;
 			}
 		}
-		// Reception ordre
-		if(action.ventilo_valide){
-			if (action.act_rafraichissement || action.act_balayage){
-				Vent_Marche();
-				balaye = action.act_balayage;
-				if(balaye){
-					__HAL_TIM_SET_COUNTER(&htim5,0);
-					sens =1;
-					HAL_GPIO_WritePin(DIR_GPIO_Port, DIR_Pin, GPIO_PIN_RESET);
-					t_bal = t_inversion = xTaskGetTickCount();
-				}
-			}
-			else{
-				balaye = false;
-				Vent_Arret();
-			}
-		}
-
-		if(action.alarme_valide){
-			if(action.act_alarme && !sonne){
-				xSemaphoreTake(mtx_consignesHandle,portMAX_DELAY);
-				if(consignes.sel_melodie < NB_MELODIES){
-					mel = consignes.sel_melodie;
+		if(xQueueReceive(ActionsHandle, &action, wait) == pdPASS){
+			// Reception ordre
+			if(action.ventilo_valide){
+				if (action.act_rafraichissement || action.act_balayage){
+					Vent_Marche();
+					balaye = action.act_balayage;
+					if(balaye){
+						__HAL_TIM_SET_COUNTER(&htim5,0);
+						sens = 1;
+						HAL_GPIO_WritePin(DIR_GPIO_Port, DIR_Pin, GPIO_PIN_RESET);
+						t_bal = t_inversion = xTaskGetTickCount();
+					}
 				}
 				else{
-					mel = 0;
+					balaye = false;
+					Vent_Arret();
 				}
-				xSemaphoreGive(mtx_consignesHandle);
-				idx = 0;
-				sonne = true;
-				HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_4);
-				t_note = xTaskGetTickCount();
 			}
-			else if(!action.act_alarme){
-				sonne = false;
-				HAL_TIM_PWM_Stop(&htim8, TIM_CHANNEL_4);
+
+			if(action.alarme_valide){
+				if(action.act_alarme && !sonne){
+					xSemaphoreTake(mtx_consignesHandle,portMAX_DELAY);
+					if(consignes.sel_melodie < NB_MELODIES){
+						mel = consignes.sel_melodie;
+					}
+					else{
+						mel = 0;
+					}
+					xSemaphoreGive(mtx_consignesHandle);
+					idx = 0;
+					sonne = true;
+					HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_4);
+					t_note = xTaskGetTickCount();
+				}
+				else if(!action.act_alarme){
+					sonne = false;
+					HAL_TIM_PWM_Stop(&htim8, TIM_CHANNEL_4);
+				}
 			}
 		}
 		// Action
 		now = xTaskGetTickCount();
 
-		if(sonne && (now - t_note) >= 0){
+		if(sonne && (int32_t)(now - t_note) >= 0){
 			const Note* n= &melodies[mel].notes[idx];
 			Buzzer_Note(n->feq);
 			t_note = now + pdMS_TO_TICKS(n->duree);
 			idx = (idx +1) % melodies[mel].nb;
 		}
 
-		if(balaye && (now - t_note) >= 0){
-			int pos = __HAL_TIM_GET_COUNTER(&htim5);
+		if(balaye && (int32_t)(now - t_note) >= 0){
+			int pos = (int32_t)__HAL_TIM_GET_COUNTER(&htim5);
 			bool inverser = (sens > 0 && pos >= BALAYAGE_BORNE) ||
 							(sens < 0 && pos <= BALAYAGE_BORNE) ||
 							((now - t_inversion) > pdMS_TO_TICKS(BALAYAGE_MAX));
