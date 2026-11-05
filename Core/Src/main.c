@@ -57,7 +57,7 @@
 #define BALAYAGE_MAX 5000       // sécurité si l'encodeur ne répond pas
 #define PERIODE_HORLOGE  1000#define DUREE_AUBE 30000
 #define DUREE_CREP 30000
-#define PERIODE_MAJ_LED 100#define SNOOZE_MIN  10 // Temps du snooze du reveil
+#define PERIODE_MAJ_LED 100#define SNOOZE_MIN  10 // Temps du snooze du reveil#define PERIODE_VENT_MS 5000 //
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -309,6 +309,39 @@ QueueHandle_t ActionsHandle;
 void Act_alarme(bool on); // Activer la melodie de l'alarme
 Heure Set_alarme(Heure base,int delta); // Reglage de l'alarme (le snooze y compris)
 
+
+typedef struct
+{
+	bool act_rafraichissement;
+	bool act_balayage;
+	bool act_alarme;        // true = sonner, false = couper
+	bool alarme_valide; 	// Provisoire Signal d'ordre
+	bool ventilo_valide;	// Provisoire
+}Actions;
+
+typedef struct
+{
+	uint16_t temperature;
+	uint16_t luminosite;
+	uint16_t qualite_air;
+	uint16_t qualite_sommeil;
+}Infos;
+
+// DECLARATION TACHES
+xTaskHandle xTaskGestionVentilateur;
+
+void task_gestion_ventilateur(void *pvParameters);
+
+// DECLARATION SEMAPHORES
+xSemaphoreHandle sem_refreshHandle;
+xSemaphoreHandle mtx_consignesHandle;
+// MAILBOXES
+xQueueHandle InfosHandle;
+xQueueHandle ActionsHandle;
+// FONCTIONS
+void Act_ventilateur(bool rafraichir, bool balayer);
+
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -401,6 +434,8 @@ int main(void)
   mtx_i2cHandle = xSemaphoreCreateMutex();
   sem_alarmeHandle = xSemaphoreCreateBinary();
   mtx_heureHandle = xSemaphoreCreateMutex();
+  sem_refreshHandle = xSemaphoreCreateBinary();
+  mtx_consignesHandle = xSemaphoreCreateMutex();
   /* USER CODE END RTOS_SEMAPHORES */
 
   /* USER CODE BEGIN RTOS_TIMERS */
@@ -475,6 +510,12 @@ int main(void)
                           tskIDLE_PRIORITY+10,/* Priority at which the task is created. */
   						&xTaskGestionAlarme  );      /* Used to pass out the created task's handle. */
   /* add threads, ... */
+  xTaskCreate(task_gestion_ventilateur,       /* Function that implements the task. */
+			"TASK_GESTION_VENTILATEUR",          /* Text name for the task. */
+			1024,      /* Stack size in words, not bytes. */
+			NULL,    /* Parameter passed into the task. */
+			tskIDLE_PRIORITY+3,/* Priority at which the task is created. */
+			&xTaskGestionVentilateur  );      /* Used to pass out the created task's handle. */
   /* USER CODE END RTOS_THREADS */
 
   /* Start scheduler */
@@ -1122,6 +1163,38 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 
 // FONCTIONS //
+void Act_ventilateur(bool rafraichir, bool balayer){
+	Actions action;
+	action.ventilo_valide = true;
+	action.act_rafraichissement = rafraichir;
+	action.act_balayage = balayer;
+	xQueueSend(ActionsHandle, &action, pdMS_TO_TICKS(100));
+}
+
+void task_gestion_ventilateur(void *pvParameters){
+	Infos info;
+	uint16_t seuil_temp, seuil_qa;
+
+	while(1){
+		// Attente de la commande manuel ou 5 minutes
+		bool manuel = (xSemaphoreTake(sem_refreshHandle,pdMS_TO_TICKS(PERIODE_VENT_MS)) == pdTRUE);
+
+		// Dernières mesures (Peek : ne vide pas la file, les autres tâches la lisent aussi)
+		if(xQueuePeek(InfosHandle, &info, 0) != pdPASS){
+			continue;   // pas encore de mesure
+		}
+
+		xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
+		seuil_temp = consignes.seuil_temperature;
+		seuil_qa = consignes.seuil_qa;
+		xSemaphoreGive(mtx_consignesHandle);
+
+		bool rafraichir = manuel || (info.temperature > seuil_temp);
+		bool aerer = info.qualite_air < seuil_qa;
+		Act_ventilateur(rafraichir,aerer);
+	}
+}
+
 void Act_alarme(bool on){
 	Actions action;
 	action.alarme_valide = true;
