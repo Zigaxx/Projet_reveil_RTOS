@@ -1,11 +1,17 @@
 #MicroXplorer Configuration settings - do not modify
 ADC1.Channel-0\#ChannelRegularConversion=ADC_CHANNEL_13
+ADC1.Channel-1\#ChannelRegularConversion=ADC_CHANNEL_11
 ADC1.CommonPathInternal=null|null|null|null
-ADC1.IPParameters=Rank-0\#ChannelRegularConversion,Channel-0\#ChannelRegularConversion,SamplingTime-0\#ChannelRegularConversion,OffsetNumber-0\#ChannelRegularConversion,NbrOfConversionFlag,master,CommonPathInternal
+ADC1.EOCSelection=ADC_EOC_SEQ_CONV
+ADC1.IPParameters=Rank-0\#ChannelRegularConversion,Channel-0\#ChannelRegularConversion,SamplingTime-0\#ChannelRegularConversion,OffsetNumber-0\#ChannelRegularConversion,NbrOfConversionFlag,master,Rank-1\#ChannelRegularConversion,Channel-1\#ChannelRegularConversion,SamplingTime-1\#ChannelRegularConversion,OffsetNumber-1\#ChannelRegularConversion,NbrOfConversion,EOCSelection,CommonPathInternal
+ADC1.NbrOfConversion=2
 ADC1.NbrOfConversionFlag=1
 ADC1.OffsetNumber-0\#ChannelRegularConversion=ADC_OFFSET_NONE
+ADC1.OffsetNumber-1\#ChannelRegularConversion=ADC_OFFSET_NONE
 ADC1.Rank-0\#ChannelRegularConversion=1
-ADC1.SamplingTime-0\#ChannelRegularConversion=ADC_SAMPLETIME_2CYCLES_5
+ADC1.Rank-1\#ChannelRegularConversion=2
+ADC1.SamplingTime-0\#ChannelRegularConversion=ADC_SAMPLETIME_47CYCLES_5
+ADC1.SamplingTime-1\#ChannelRegularConversion=ADC_SAMPLETIME_47CYCLES_5
 ADC1.master=1
 CAD.formats=
 CAD.pinconfig=
@@ -28,10 +34,17 @@ Dma.TIM3_CH4/UP.0.PeriphInc=DMA_PINC_DISABLE
 Dma.TIM3_CH4/UP.0.Priority=DMA_PRIORITY_LOW
 Dma.TIM3_CH4/UP.0.RequestParameters=Instance,Direction,PeriphInc,MemInc,PeriphDataAlignment,MemDataAlignment,Mode,Priority
 FREERTOS.INCLUDE_vTaskDelayUntil=1
+<<<<<<< HEAD
 FREERTOS.IPParameters=Tasks01,configTOTAL_HEAP_SIZE,configUSE_NEWLIB_REENTRANT,INCLUDE_vTaskDelayUntil,configUSE_IDLE_HOOK,configUSE_COUNTING_SEMAPHORES
 FREERTOS.Tasks01=defaultTask,0,128,StartDefaultTask,Default,NULL,Dynamic,NULL,NULL
 FREERTOS.configTOTAL_HEAP_SIZE=30000
 FREERTOS.configUSE_COUNTING_SEMAPHORES=1
+=======
+FREERTOS.IPParameters=Tasks01,configTOTAL_HEAP_SIZE,configUSE_NEWLIB_REENTRANT,INCLUDE_vTaskDelayUntil,configUSE_IDLE_HOOK,configMAX_PRIORITIES
+FREERTOS.Tasks01=defaultTask,0,128,StartDefaultTask,Default,NULL,Dynamic,NULL,NULL
+FREERTOS.configMAX_PRIORITIES=12
+FREERTOS.configTOTAL_HEAP_SIZE=35000
+>>>>>>> origin/Gestion_sorties
 FREERTOS.configUSE_IDLE_HOOK=1
 FREERTOS.configUSE_NEWLIB_REENTRANT=1
 File.Version=6
@@ -107,8 +120,11 @@ MxCube.Version=6.15.0
 MxDb.Version=DB.6.0.150
 NVIC.ADC1_2_IRQn=true\:5\:0\:false\:false\:true\:true\:true\:true\:true
 NVIC.BusFault_IRQn=true\:0\:0\:false\:false\:true\:false\:true\:false\:false
+<<<<<<< HEAD
 NVIC.CAN1_RX0_IRQn=true\:5\:0\:false\:false\:true\:true\:true\:true\:true
 NVIC.CAN1_RX1_IRQn=true\:5\:0\:false\:false\:true\:true\:true\:true\:true
+=======
+>>>>>>> origin/Gestion_sorties
 NVIC.DMA1_Channel3_IRQn=true\:5\:0\:false\:false\:true\:true\:false\:true\:true
 NVIC.DebugMonitor_IRQn=true\:0\:0\:false\:false\:true\:false\:true\:false\:false
 NVIC.EXTI15_10_IRQn=true\:5\:0\:false\:false\:true\:true\:true\:true\:true
@@ -267,7 +283,7 @@ ProjectManager.LastFirmware=true
 ProjectManager.LibraryCopy=1
 ProjectManager.MainLocation=Core/Src
 ProjectManager.NoMain=false
-ProjectManager.PreviousToolchain=
+ProjectManager.PreviousToolchain=STM32CubeIDE
 ProjectManager.ProjectBuild=false
 ProjectManager.ProjectFileName=Projet_freeRTOS.ioc
 ProjectManager.ProjectName=Projet_freeRTOS
@@ -364,7 +380,13 @@ TIM2.IPParameters=Channel-PWM Generation1 CH1,Period
 TIM2.Period=3999
 TIM3.Channel-PWM\ Generation4\ CH4=TIM_CHANNEL_4
 TIM3.IPParameters=Channel-PWM Generation4 CH4,Period
+<<<<<<< HEAD
 TIM3.Period=99
+=======
+TIM3.Period=99-1
+TIM5.EncoderMode=TIM_ENCODERMODE_TI12
+TIM5.IPParameters=EncoderMode
+>>>>>>> origin/Gestion_sorties
 TIM8.Channel-PWM\ Generation4\ CH4=TIM_CHANNEL_4
 TIM8.IPParameters=Channel-PWM Generation4 CH4,Prescaler
 TIM8.Prescaler=79
@@ -381,4 +403,3 @@ VP_TIM8_VS_ClockSourceINT.Signal=TIM8_VS_ClockSourceINT
 board=NUCLEO-L476RG
 boardIOC=true
 rtos.0.ip=FREERTOS
-isbadioc=false

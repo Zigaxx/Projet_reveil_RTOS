@@ -192,6 +192,7 @@ void ADC1_2_IRQHandler(void)
 }
 
 /**
+<<<<<<< HEAD
   * @brief This function handles CAN1 RX0 interrupt.
   */
 void CAN1_RX0_IRQHandler(void)
@@ -236,6 +237,8 @@ void EXTI15_10_IRQHandler(void)
 }
 
 /**
+=======
+>>>>>>> origin/Gestion_sorties
   * @brief This function handles TIM6 global interrupt, DAC channel1 and channel2 underrun error interrupts.
   */
 void TIM6_DAC_IRQHandler(void)
