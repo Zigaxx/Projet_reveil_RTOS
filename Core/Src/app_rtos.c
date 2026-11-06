@@ -116,19 +116,19 @@ void App_init(void)
 			"alarmes",          /* Text name for the task. */
 			256,      /* Stack size in words, not bytes. */
 			NULL,    /* Parameter passed into the task. */
-			tskIDLE_PRIORITY+4,/* Priority at which the task is created. */
+			tskIDLE_PRIORITY+10,/* Priority at which the task is created. */
 			NULL );      /* Used to pass out the created task's handle. */
 	xTaskCreate(task_gestion_ventilateur,       /* Function that implements the task. */
 			"ventilateur",          /* Text name for the task. */
 			256,      /* Stack size in words, not bytes. */
 			NULL,    /* Parameter passed into the task. */
-			tskIDLE_PRIORITY+2,/* Priority at which the task is created. */
+			tskIDLE_PRIORITY+5,/* Priority at which the task is created. */
 			NULL );      /* Used to pass out the created task's handle. */
 	xTaskCreate(task_acq_luminosite,       /* Function that implements the task. */
 			"luminosite",          /* Text name for the task. */
 			256,      /* Stack size in words, not bytes. */
 			NULL,    /* Parameter passed into the task. */
-			tskIDLE_PRIORITY+2,/* Priority at which the task is created. */
+			tskIDLE_PRIORITY+1,/* Priority at which the task is created. */
 			NULL );      /* Used to pass out the created task's handle. */
 	xTaskCreate(task_acq_temp_qa,       /* Function that implements the task. */
 			"temperature/QA",          /* Text name for the task. */

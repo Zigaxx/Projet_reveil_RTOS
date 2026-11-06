@@ -29,7 +29,7 @@
 #define PERIODE_MAJ_LED 100
 
 /* ---- Ventilateur ---- */
-#define PERIODE_VENT_MS 5000
+#define PERIODE_VENT_MS 1000
 #define PERIODE_BALAYAGE_MS 500
 #define BALAYAGE_BORNE 2700 // en pas d'encodeur, à calibrer
 #define BALAYAGE_PAS 200
