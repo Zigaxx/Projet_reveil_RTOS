@@ -1,9 +1,11 @@
 #include "app_rtos.h"
 
 
+
+
 uint16_t sgp40_baseline = 0;
 
-uint16_t ADC_Lire(uint32_t canal){
+uint16_t ADC_Lire(uint8_t canal){
 	uint16_t valeur[2];
 
 	xSemaphoreTake(mtx_adcHandle,portMAX_DELAY);
@@ -14,7 +16,6 @@ uint16_t ADC_Lire(uint32_t canal){
 		}
 	}
 	HAL_ADC_Stop(&hadc1);
-
 	xSemaphoreGive(mtx_adcHandle);
 	return valeur[canal];
 }
@@ -24,57 +25,50 @@ uint16_t Lire_Luminosite(){
 }
 
 
+
+HAL_StatusTypeDef TC72_Transfer(uint8_t *tx, uint8_t *rx, uint16_t n){
+	HAL_GPIO_WritePin(CSN_GPIO_Port, CSN_Pin, GPIO_PIN_SET);   // CSN toujours haut
+	HAL_GPIO_WritePin(CE_GPIO_Port, CE_Pin, GPIO_PIN_SET);     // CE actif à l'état haut
+	vTaskDelay(pdMS_TO_TICKS(1));
+	HAL_StatusTypeDef st = HAL_SPI_TransmitReceive(&hspi2, tx, rx, n, 10);
+	HAL_GPIO_WritePin(CE_GPIO_Port, CE_Pin, GPIO_PIN_RESET);
+	return st;
+}
+
+void TC72_Init(){
+	uint8_t rx[4] = {0};
+
+	uint8_t w[2] = {0x80, 0x04};            // écriture du contrôle : conversion continue
+	TC72_Transfer(w, rx, 2);
+	vTaskDelay(pdMS_TO_TICKS(200));         // première conversion ≈ 150 ms
+
+	uint8_t c[2] = {0x00, 0x00};            // relecture du contrôle : doit afficher 04
+	TC72_Transfer(c, rx, 2);
+	printf("TC72 controle = 0x%02X (attendu 0x04)\r\n", rx[1]);
+
+	uint8_t i[2] = {0x03, 0x00};            // ID fabricant
+	TC72_Transfer(i, rx, 2);
+	printf("TC72 ID = 0x%02X (attendu 0x54)\r\n", rx[1]);
+}
+
 float Lire_Temperature(){
-    uint8_t cmd_std[2] = {0x80, 0x00}; // 0x80 = Adresse registre de contrôle (écriture), 0x00 = Mode Conversion Continue (recommandé pour éviter les blocages one-shot)
-    uint8_t reg_temp_msb = 0x02;       // Adresse de début de lecture (MSB de la température)
-    uint8_t rx[2] = {0};
+	static float derniere = 0.0f;
+	uint8_t tx[4] = {0x02, 0, 0, 0};        // lecture séquentielle : MSB, LSB, contrôle
+	uint8_t rx[4] = {0};
 
-    // 1. Configuration du capteur (Mode continu pour actualiser la température en permanence)
-    HAL_GPIO_WritePin(CE_GPIO_Port, CE_Pin, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(CSN_GPIO_Port, CSN_Pin, GPIO_PIN_RESET);
+	if(TC72_Transfer(tx, rx, 4) != HAL_OK){
+		return derniere;
+	}
 
-    if(HAL_SPI_Transmit(&hspi2, cmd_std, 2, 10) != HAL_OK) {
-        HAL_GPIO_WritePin(CSN_GPIO_Port, CSN_Pin, GPIO_PIN_SET);
-        HAL_GPIO_WritePin(CE_GPIO_Port, CE_Pin, GPIO_PIN_RESET);
-        return -1000.00f;
-    }
-    HAL_GPIO_WritePin(CSN_GPIO_Port, CSN_Pin, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(CE_GPIO_Port, CE_Pin, GPIO_PIN_RESET);
+	int8_t  msb = (int8_t)rx[1];
+	uint8_t lsb = rx[2];
 
-    // Petite pause pour laisser le composant respirer
-    vTaskDelay(pdMS_TO_TICKS(200));
+	float t = (float)msb;
+	if(lsb & 0x80) t += 0.5f;
+	if(lsb & 0x40) t += 0.25f;
 
-    // 2. Lecture séquentielle de la température (MSB à 0x02 puis LSB automatiquement à 0x03)
-    HAL_GPIO_WritePin(CE_GPIO_Port, CE_Pin, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(CSN_GPIO_Port, CSN_Pin, GPIO_PIN_RESET);
-
-    // Envoi de l'adresse de départ du registre MSB (bit MSB à 0 pour une lecture -> 0x02)
-    if(HAL_SPI_Transmit(&hspi2, &reg_temp_msb, 1, 10) != HAL_OK) {
-        HAL_GPIO_WritePin(CSN_GPIO_Port, CSN_Pin, GPIO_PIN_SET);
-        HAL_GPIO_WritePin(CE_GPIO_Port, CSN_Pin, GPIO_PIN_RESET);
-        return -1000.00f;
-    }
-
-    // Réception de 2 octets d'affilée : rx[0] = MSB, rx[1] = LSB
-    if(HAL_SPI_Receive(&hspi2, rx, 2, 10) != HAL_OK) {
-        HAL_GPIO_WritePin(CSN_GPIO_Port, CSN_Pin, GPIO_PIN_SET);
-        HAL_GPIO_WritePin(CE_GPIO_Port, CSN_Pin, GPIO_PIN_RESET);
-        return -1000.00f;
-    }
-
-    HAL_GPIO_WritePin(CSN_GPIO_Port, CSN_Pin, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(CE_GPIO_Port, CE_Pin, GPIO_PIN_RESET);
-
-    // 3. Extraction et calcul de la température
-    int8_t msb = (int8_t)rx[0];  // Partie entière signée (gère les températures négatives)
-    uint8_t lsb = rx[1];         // Partie décimale
-
-    float decimale = 0.0f;
-    if (lsb & 0x80) decimale += 0.5f;   // Bit 7 du LSB = 0.5°C
-    if (lsb & 0x40) decimale += 0.25f;  // Bit 6 du LSB = 0.25°C
-
-    float temperature = (float)msb + decimale;
-    return temperature;
+	derniere = t;
+	return t;
 }
 
 uint16_t QA_Init(){
@@ -146,6 +140,7 @@ void task_acq_luminosite(void *pvParameters){
 
 void task_acq_temp_qa(void *pvParameters){
 	TickType_t  dernier = xTaskGetTickCount();
+	TC72_Init();
 
 	while(1){
 		float temp = Lire_Temperature();

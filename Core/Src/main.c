@@ -141,10 +141,10 @@ int main(void)
 
   // Valeurs par défaut (avant le démarrage du scheduler : pas besoin de mutex)
   //consignes.alarme.h = 0;  consignes.alarme.min = 0;  consignes.alarme.sec = 20;   // sonne 20 s après le reset
-  consignes.sel_melodie       = 1;
+  consignes.sel_melodie       = 3;
   consignes.sel_affichage     = 0;
   consignes.vitesse_ventilo   = 10000;
-  consignes.seuil_temperature = 28;
+  consignes.seuil_temperature = 30;
   consignes.seuil_luminosite  = 3500;
   consignes.seuil_qa          = 150;
   printf("Demarrage\r\n");
@@ -492,7 +492,7 @@ static void MX_SPI2_Init(void)
   hspi2.Init.Direction = SPI_DIRECTION_2LINES;
   hspi2.Init.DataSize = SPI_DATASIZE_8BIT;
   hspi2.Init.CLKPolarity = SPI_POLARITY_LOW;
-  hspi2.Init.CLKPhase = SPI_PHASE_1EDGE;
+  hspi2.Init.CLKPhase = SPI_PHASE_2EDGE;
   hspi2.Init.NSS = SPI_NSS_SOFT;
   hspi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_64;
   hspi2.Init.FirstBit = SPI_FIRSTBIT_MSB;
@@ -835,69 +835,69 @@ int _write(int fd, char *ptr, int len){
 void StartDefaultTask(void const * argument)
 {
   /* USER CODE BEGIN 5 */
-	  Infos info;
-	  // ---- T+2 s : lecture des mesures ----
+  Infos info;
+
+  // ---- T+2 s : lecture des mesures ----
+  osDelay(2000);
+  if(xQueuePeek(InfosHandle, &info, 0) == pdPASS){
+	  printf("Mesures : T=%u C  Lumi=%u  QA=%u  QS=%u\r\n",
+			 info.temperature, info.luminosite, info.qualite_air, info.qualite_sommeil);
+  } else {
+	  printf("Aucune mesure dans Infos\r\n");
+  }
+
+  // ---- T+5 s : test ventilateur manuel (tourner le potentiometre) ----
+  /*osDelay(3000);
+  printf("TEST ventilateur : refresh manuel\r\n");
+
+  // ---- T+10 s : cycle des valeurs affichees ----
+  osDelay(5000);
+  for(int i = 1; i <= 3; i++){
+	  xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
+	  consignes.sel_affichage = i;                  // 1 temp, 2 QA, 3 QS
+	  xSemaphoreGive(mtx_consignesHandle);
+	  printf("TEST affichage : sel = %d\r\n", i);
 	  osDelay(2000);
-	  if(xQueuePeek(InfosHandle, &info, 0) == pdPASS){
-	      printf("Mesures : T=%u C  Lumi=%u  QA=%u  QS=%u\r\n",
-	             info.temperature, info.luminosite, info.qualite_air, info.qualite_sommeil);
-	  } else {
-	      printf("Aucune mesure dans Infos\r\n");
-	  }
+  }
+  xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
+  consignes.sel_affichage = 0;
+  xSemaphoreGive(mtx_consignesHandle);
 
-	  // ---- T+5 s : test ventilateur manuel (tourner le potentiometre) ----
-	  osDelay(3000);
-	  printf("TEST ventilateur : refresh manuel\r\n");
-	  xSemaphoreGive(sem_refreshHandle);
+  // ---- T+20 s : l'alarme se declenche (aube + buzzer) ----
+  osDelay(10000);
+  printf("TEST alarme : doit sonner, LEDs en montee\r\n");
 
-	  // ---- T+10 s : cycle des valeurs affichees ----
-	  osDelay(5000);
-	  for(int i = 1; i <= 3; i++){
-	      xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
-	      consignes.sel_affichage = i;                  // 1 temp, 2 QA, 3 QS
-	      xSemaphoreGive(mtx_consignesHandle);
-	      printf("TEST affichage : sel = %d\r\n", i);
-	      osDelay(2000);
-	  }
-	  xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
-	  consignes.sel_affichage = 1;
-	  xSemaphoreGive(mtx_consignesHandle);
+  // ---- Snooze apres 8 s de sonnerie ----
+  osDelay(8000);
+  printf("TEST snooze : buzzer et LEDs doivent s'eteindre\r\n");
+  xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
+  consignes.snooze_alarme = true;
+  Heure a = consignes.alarme;
+  xSemaphoreGive(mtx_consignesHandle);
+  osDelay(500);
+  printf("Nouvelle alarme : %02u:%02u:%02u\r\n", a.h, a.min, a.sec);
 
-	  // ---- T+20 s : l'alarme se declenche (aube + buzzer) ----
-	  osDelay(10000);
-	  printf("TEST alarme : doit sonner, LEDs en montee\r\n");
+  // ---- Crepuscule ----
+  osDelay(3000);
+  printf("TEST crepuscule : LEDs en descente\r\n");
+  xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
+  consignes.activer_crepuscule = true;
+  xSemaphoreGive(mtx_consignesHandle);
 
-	  // ---- Snooze apres 8 s de sonnerie ----
-	  osDelay(8000);
-	  printf("TEST snooze : buzzer et LEDs doivent s'eteindre\r\n");
-	  xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
-	  consignes.snooze_alarme = true;
-	  Heure a = consignes.alarme;
-	  xSemaphoreGive(mtx_consignesHandle);
-	  osDelay(500);
-	  printf("Nouvelle alarme : %02u:%02u:%02u\r\n", a.h, a.min, a.sec);
+  // ---- Test du stop : on avance l'horloge a 1 s de l'alarme (voir remarque 1) ----
+  osDelay(35000);
+  xSemaphoreTake(mtx_heureHandle, portMAX_DELAY);
+  heure = consignes.alarme;
+  if(heure.sec > 0) heure.sec--;
+  xSemaphoreGive(mtx_heureHandle);
+  printf("TEST alarme de nouveau : puis STOP\r\n");
+  osDelay(6000);
+  xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
+  consignes.stop_alarme = true;
+  xSemaphoreGive(mtx_consignesHandle);
+  printf("Fin des tests\r\n");*/
 
-	  // ---- Crepuscule ----
-	  osDelay(3000);
-	  printf("TEST crepuscule : LEDs en descente\r\n");
-	  xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
-	  consignes.activer_crepuscule = true;
-	  xSemaphoreGive(mtx_consignesHandle);
-
-	  // ---- Test du stop : on avance l'horloge a 1 s de l'alarme (voir remarque 1) ----
-	  osDelay(35000);
-	  xSemaphoreTake(mtx_heureHandle, portMAX_DELAY);
-	  heure = consignes.alarme;
-	  if(heure.sec > 0) heure.sec--;
-	  xSemaphoreGive(mtx_heureHandle);
-	  printf("TEST alarme de nouveau : puis STOP\r\n");
-	  osDelay(6000);
-	  xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
-	  consignes.stop_alarme = true;
-	  xSemaphoreGive(mtx_consignesHandle);
-	  printf("Fin des tests\r\n");
-
-	  for(;;){ osDelay(1000); }
+  for(;;){ osDelay(1000); }
   /* USER CODE END 5 */
 }
 

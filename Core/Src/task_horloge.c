@@ -44,7 +44,6 @@ void task_gestion_horloge(void *pvParameters){
 		xSemaphoreTake(mtx_heureHandle, portMAX_DELAY);
 		Heure_Incrementer(&heure);
 		h = heure; // Copie locale pour la comparaison avec l'alarme
-		printf("tick %02u:%02u:%02u\r\n", h.h, h.min, h.sec);
 		xSemaphoreGive(mtx_heureHandle);
 
 		bool mesure_ok = (xQueuePeek(InfosHandle, &infos, 0) == pdPASS); // dernières mesures (Peek, comme pour le ventilateur)

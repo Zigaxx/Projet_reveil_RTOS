@@ -4,7 +4,7 @@
 Consignes consignes;
 Heure heure = {0,0,0};
 Infos infos_acq = {0};
-
+Actions actions = {0};
 // ---- Objets RTOS ----
 xTaskHandle xTaskAcqLumi;
 xTaskHandle xTaskAcqTempQA;
@@ -18,7 +18,7 @@ xTaskHandle xTaskGestionVentilateur;
 
 xSemaphoreHandle mtx_consignesHandle, mtx_infosHandle, mtx_adcHandle;
 xSemaphoreHandle mtx_i2cHandle, mtx_heureHandle;
-xSemaphoreHandle sem_alarmeHandle, sem_refreshHandle, sem_ledHandle;
+xSemaphoreHandle sem_alarmeHandle, sem_ledHandle;
 
 xQueueHandle InfosHandle, AffHandle, ActionsHandle;
 
@@ -27,7 +27,6 @@ void App_init(){
 	// ---- Semaphore ----
 	sem_ledHandle     = xSemaphoreCreateBinary();
 	sem_alarmeHandle  = xSemaphoreCreateBinary();
-	sem_refreshHandle = xSemaphoreCreateBinary();
 
 	mtx_consignesHandle = xSemaphoreCreateMutex();
 	mtx_infosHandle     = xSemaphoreCreateMutex();

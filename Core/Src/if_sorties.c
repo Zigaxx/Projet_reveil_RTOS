@@ -11,11 +11,20 @@
 const Note mel_beep[] = { {2000,200}, {0,200} };
 const Note mel_1[]    = { {523,200}, {659,200}, {784,200}, {1047,400}, {0,300} };
 const Note mel_2[]    = { {784,150}, {988,150}, {1175,150}, {1568,300}, {0,400} };
+const Note mel_3[] = {
+    {523, 300}, {587, 300}, {659, 300}, {523, 300}, // Frère Jacques, frère Jacques
+    {523, 300}, {587, 300}, {659, 300}, {523, 300}, // Dormez-vous ? dormez-vous ?
+    {659, 300}, {698, 300}, {784, 600},             // Sonnez les matines, sonnez les matines
+    {659, 300}, {698, 300}, {784, 600},             // Sonnez les matines, sonnez les matines
+    {523, 300}, {392, 300}, {523, 600},             // Din, dan, don, din, dan, don
+    {0, 400}                                        // Silence final
+};
 
 const Melodie melodies[] = {
 	{ mel_beep, sizeof(mel_beep)/sizeof(Note) },    // 0 = beep
 	{ mel_1,    sizeof(mel_1)/sizeof(Note)    },
 	{ mel_2,    sizeof(mel_2)/sizeof(Note)    },
+	{ mel_3,    sizeof(mel_3)/sizeof(Note)    },
 };
 
 uint16_t led_buffer[LED_BITS + LED_RESET_SLOTS];
@@ -107,8 +116,9 @@ void Ecran_Afficher(const Affichages *a){
 
 // Ventilateur
 void Vent_Marche(){
-	uint16_t pot = ADC_Lire(ADC_CHANNEL_11);
-	__HAL_TIM_SET_COMPARE(&htim2,TIM_CHANNEL_1,(uint32_t)pot * 3999 / 4095);
+	//uint16_t pot = ADC_Lire(1);
+	//__HAL_TIM_SET_COMPARE(&htim2,TIM_CHANNEL_1,(uint32_t)pot * 3999 / 4095);
+	__HAL_TIM_SET_COMPARE(&htim2,TIM_CHANNEL_1,3999);
 	HAL_GPIO_WritePin(DIS_GPIO_Port, DIS_Pin, GPIO_PIN_RESET); // activation du moteur
 }
 

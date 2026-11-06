@@ -9,25 +9,37 @@ void Act_ventilateur(bool rafraichir, bool balayer){
 }
 
 void task_gestion_ventilateur(void *pvParameters){
-	Infos info;
-	uint16_t seuil_temp, seuil_qa;
+	Infos info = {0};
+	float    seuil_temp;
+	uint16_t seuil_qa;
+	bool manuel_actif = false;
+	bool dernier_rafraichir = false, dernier_aerer = false;
+	bool premier = true;                      // force le premier envoi
 
 	while(1){
-		// Attente de la commande manuel ou 5 minutes
-		bool manuel = (xSemaphoreTake(sem_refreshHandle,pdMS_TO_TICKS(PERIODE_VENT_MS)) == pdTRUE);
+		uint16_t pot = ADC_Lire(1);
+				if(!manuel_actif && pot > 300)  manuel_actif = true;
+				if( manuel_actif && pot < 150) manuel_actif = false;
 
-		// Dernières mesures (Peek : ne vide pas la file, les autres tâches la lisent aussi)
-		if(xQueuePeek(InfosHandle, &info, 0) != pdPASS){
-			continue;   // pas encore de mesure
+		bool mesure_ok = (xQueuePeek(InfosHandle, &info, 0) == pdPASS);
+
+		if(mesure_ok){
+			xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
+			seuil_temp = consignes.seuil_temperature;
+			seuil_qa   = consignes.seuil_qa;
+			xSemaphoreGive(mtx_consignesHandle);
+
+			bool rafraichir =  manuel_actif || (info.temperature > seuil_temp);
+			bool aerer      = (info.qualite_air > seuil_qa);
+
+			if(premier || rafraichir != dernier_rafraichir || aerer != dernier_aerer){
+				premier = false;
+				dernier_rafraichir = rafraichir;
+				dernier_aerer = aerer;
+				printf("VENT: rafraichir=%d aerer=%d\r\n", rafraichir, aerer);
+				Act_ventilateur(rafraichir, aerer);
+			}
 		}
-
-		xSemaphoreTake(mtx_consignesHandle, portMAX_DELAY);
-		seuil_temp = consignes.seuil_temperature;
-		seuil_qa = consignes.seuil_qa;
-		xSemaphoreGive(mtx_consignesHandle);
-
-		bool rafraichir = manuel || (info.temperature > seuil_temp);
-		bool aerer = info.qualite_air > seuil_qa;
-		Act_ventilateur(rafraichir,aerer);
+		vTaskDelay(pdMS_TO_TICKS(PERIODE_VENT_MS));
 	}
 }

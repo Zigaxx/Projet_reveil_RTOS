@@ -59,6 +59,7 @@ extern TIM_HandleTypeDef htim2, htim3, htim5, htim8;
 extern Consignes consignes;
 extern Heure     heure;
 extern Infos     infos_acq;
+extern Actions 	 actions;
 // ---- Objets freertos -----
 extern xTaskHandle xTaskAcqLumi;
 extern xTaskHandle xTaskAcqTempQA;
@@ -72,7 +73,7 @@ extern xTaskHandle xTaskGestionVentilateur;
 
 extern xSemaphoreHandle mtx_consignesHandle, mtx_infosHandle, mtx_adcHandle;
 extern xSemaphoreHandle mtx_i2cHandle, mtx_heureHandle;
-extern xSemaphoreHandle sem_alarmeHandle, sem_refreshHandle, sem_ledHandle;
+extern xSemaphoreHandle sem_alarmeHandle, sem_ledHandle;
 extern xQueueHandle InfosHandle, AffHandle, ActionsHandle;
 
 void App_init();
@@ -91,13 +92,11 @@ void task_gestion_alarme(void *pvParameters);
 void task_gestion_ventilateur(void *pvParameters);
 
 // ---------- Acquisition ----------
-uint16_t ADC_Lire(uint32_t canal);
+uint16_t ADC_Lire(uint8_t canal);
 uint16_t Lire_Luminosite();
 
-void TC72_Init(SPI_HandleTypeDef *hspi, GPIO_TypeDef *CS_Port, uint16_t CS_Pin);
-void TC72_WriteRegister(uint8_t reg, uint8_t data);
-uint8_t TC72_ReadRegister(uint8_t reg);
-float TC72_ReadTemperature(void);
+HAL_StatusTypeDef TC72_Transfer(uint8_t *tx, uint8_t *rx, uint16_t n);
+void TC72_Init();
 float Lire_Temperature();
 
 uint16_t QA_Init();
